@@ -257,7 +257,7 @@ void SingleC2P_IdealSRMHD(MHDCons1D &u, const EOS_Data &eos, Real s2, Real b2, R
   //
   // @YK : Post-C2P flooring is done here
   //
-  // If density is below the floor, also floor internal energy and set velocity
+  // 1) If mass density is below the floor, also floor internal energy and set velocity
   // to zero.
   Real dens = u.d / lor;
   if (dens < eos.dfloor) {
@@ -270,7 +270,7 @@ void SingleC2P_IdealSRMHD(MHDCons1D &u, const EOS_Data &eos, Real s2, Real b2, R
     return;
   }
 
-  // compute specific internal energy density then apply floors
+  // 2) compute specific internal energy density then apply floors
   Real eps = lor * (qbar - mu * rbar) + z2 / (lor + 1.0);
   Real epsmin =
       fmax(eos.pfloor / (dens * gm1), eos.sfloor * pow(dens, gm1) / gm1);
