@@ -254,19 +254,30 @@ void SingleC2P_IdealSRMHD(MHDCons1D &u, const EOS_Data &eos, Real s2, Real b2, R
   Real z2 = (mu*mu*rbar/(fabs(1.- SQR(mu)*rbar)));            // (32)
   Real lor = sqrt(1.0 + z2);
 
-  // compute density then apply floor
-  Real dens = u.d/lor;
+  //
+  // @YK : Post-C2P flooring is done here
+  //
+  // If density is below the floor, also floor internal energy and set velocity
+  // to zero.
+  Real dens = u.d / lor;
   if (dens < eos.dfloor) {
-    dens = eos.dfloor;
     dfloor_used = true;
+    w.d = eos.dfloor;
+    w.e = eos.pfloor / gm1; // Ideal gas
+    w.vx = 0.0;
+    w.vy = 0.0;
+    w.vz = 0.0;
+    return;
   }
 
   // compute specific internal energy density then apply floors
-  Real eps = lor*(qbar - mu*rbar) + z2/(lor + 1.0);
-  Real epsmin = fmax(eos.pfloor/(dens*gm1), eos.sfloor*pow(dens, gm1)/gm1);
+  Real eps = lor * (qbar - mu * rbar) + z2 / (lor + 1.0);
+  Real epsmin =
+      fmax(eos.pfloor / (dens * gm1), eos.sfloor * pow(dens, gm1) / gm1);
   if (eps <= epsmin) {
     eps = epsmin;
     efloor_used = true;
+    // @YK : Note that rho and v^i are not set to zero in this case.
   }
 
   // set parameters required for velocity inversion
