@@ -28,6 +28,9 @@ IdealGRMHD::IdealGRMHD(MeshBlockPack *pp, ParameterInput *pin) :
   eos_data.use_e = true;  // ideal gas EOS always uses internal energy
   eos_data.use_t = false;
   eos_data.gamma_max = pin->GetOrAddReal("mhd","gamma_max",(FLT_MAX));  // gamma ceiling
+
+  eos_data.sigma_max =
+      pin->GetReal("mhd", "sigma_max"); // YK: sigma ceiling
 }
 
 //----------------------------------------------------------------------------------------
@@ -48,7 +51,12 @@ void IdealGRMHD::ConsToPrim(DvceArray5D<Real> &cons, const DvceFaceFld4D<Real> &
   int &nmb = pmy_pack->nmb_thispack;
   auto &fofc_ = pmy_pack->pmhd->fofc;
   auto eos = eos_data;
-  Real gm1 = eos_data.gamma - 1.0;
+
+  // YK: for sigma capping
+  const Real eos_gamma = eos_data.gamma;
+  const Real gm1 = eos_gamma - 1.0;
+  const Real sigma_max = eos_data.sigma_max;
+  const Real efloor = eos.pfloor / gm1;
 
   auto &flat = pmy_pack->pcoord->coord_data.is_minkowski;
   auto &spin = pmy_pack->pcoord->coord_data.bh_spin;
@@ -144,16 +152,111 @@ void IdealGRMHD::ConsToPrim(DvceArray5D<Real> &cons, const DvceFaceFld4D<Real> &
       SingleC2P_IdealSRMHD(u_sr, eos, s2, b2, rpar, w,
                            dfloor_used, efloor_used, c2p_failure, iter_used);
 
-      // apply velocity ceiling if necessary
+      //
+      // @YK : Drift floor : limiting sigma, while keeping parallel momentum
+      // constant
+      //
+      //  - inject density for sigma (ceiling the magnetization)
+      //  - rescale v_parallel to preserve parallel momentum
+      //
+
+      // Compute lorentz factor
       Real tmp = glower[1][1]*SQR(w.vx)
                + glower[2][2]*SQR(w.vy)
                + glower[3][3]*SQR(w.vz)
                + 2.0*glower[1][2]*w.vx*w.vy + 2.0*glower[1][3]*w.vx*w.vz
                + 2.0*glower[2][3]*w.vy*w.vz;
-      Real lor = sqrt(1.0+tmp);
-      if (lor > eos.gamma_max) {
+
+      Real lorentz_W = sqrt(1.0 + tmp);
+      //
+      // @YK : Compute sigma_cold
+      //
+      Real alpha = sqrt(-1.0 / gupper[0][0]);
+      Real u0 = lorentz_W / alpha;
+      Real u1 = w.vx - alpha * lorentz_W * gupper[0][1];
+      Real u2 = w.vy - alpha * lorentz_W * gupper[0][2];
+      Real u3 = w.vz - alpha * lorentz_W * gupper[0][3];
+      Real u_1 = glower[1][0] * u0 + glower[1][1] * u1 + glower[1][2] * u2 +
+                 glower[1][3] * u3;
+      Real u_2 = glower[2][0] * u0 + glower[2][1] * u1 + glower[2][2] * u2 +
+                 glower[2][3] * u3;
+      Real u_3 = glower[3][0] * u0 + glower[3][1] * u1 + glower[3][2] * u2 +
+                 glower[3][3] * u3;
+
+      Real b_sq;
+      {
+        // Calculate comoving magnetic field
+        Real b0 = u_1 * u.bx + u_2 * u.by + u_3 * u.bz;
+        Real b1 = (u.bx + b0 * u1) / u0;
+        Real b2 = (u.by + b0 * u2) / u0;
+        Real b3 = (u.bz + b0 * u3) / u0;
+
+        // lower vector indices
+        Real b_0 = glower[0][0] * b0 + glower[0][1] * b1 + glower[0][2] * b2 +
+                   glower[0][3] * b3;
+        Real b_1 = glower[1][0] * b0 + glower[1][1] * b1 + glower[1][2] * b2 +
+                   glower[1][3] * b3;
+        Real b_2 = glower[2][0] * b0 + glower[2][1] * b1 + glower[2][2] * b2 +
+                   glower[2][3] * b3;
+        Real b_3 = glower[3][0] * b0 + glower[3][1] * b1 + glower[3][2] * b2 +
+                   glower[3][3] * b3;
+
+        // b^2
+        b_sq = b0 * b_0 + b1 * b_1 + b2 * b_2 + b3 * b_3;
+      }
+
+      Real rhoh = w.d + (eos_gamma * w.e);
+      Real rhoh_cold = w.d + (eos_gamma * efloor);
+      Real sigma_cold = b_sq / rhoh_cold;
+
+      if (sigma_cold > sigma_max) {
+        dfloor_used = true;
+
+        // Compute v_parallel and Bnorm
+        Real B2 = glower[1][1] * SQR(u.bx) + glower[2][2] * SQR(u.by) +
+                  glower[3][3] * SQR(u.bz) + 2.0 * glower[1][2] * u.bx * u.by +
+                  2.0 * glower[1][3] * u.bx * u.bz +
+                  2.0 * glower[2][3] * u.by * u.bz;
+        Real Bnorm = sqrt(B2);
+        // v_par = B^i v_i / B
+        // Note u_i = W v_i
+        Real v_par =
+            (u_1 * u.bx + u_2 * u.by + u_3 * u.bz) / (lorentz_W * Bnorm);
+
+        // Store the constant
+        const Real parallel_momentum_over_B = rhoh * SQR(lorentz_W) * v_par;
+
+        // Compute drift velocity
+        const Real vd1 = w.vx / lorentz_W - v_par * u.bx / Bnorm;
+        const Real vd2 = w.vy / lorentz_W - v_par * u.by / Bnorm;
+        const Real vd3 = w.vz / lorentz_W - v_par * u.bz / Bnorm;
+        Real vd_sq = glower[1][1] * SQR(vd1) + glower[2][2] * SQR(vd2) +
+                     glower[3][3] * SQR(vd3) + 2.0 * glower[1][2] * vd1 * vd2 +
+                     2.0 * glower[1][3] * vd1 * vd3 +
+                     2.0 * glower[2][3] * vd2 * vd3;
+        vd_sq = fmax(0.0, fmin(vd_sq, 0.99999999));
+
+        // then inject floors
+        rhoh = b_sq / sigma_max;
+        w.d = rhoh - (eos_gamma * efloor);
+        w.e = efloor;
+
+        const Real z = 2.0 * parallel_momentum_over_B / rhoh;
+        Real v_par_updated =
+            z * (1.0 - vd_sq) / (1 + sqrt(1.0 + SQR(z) * (1.0 - vd_sq)));
+
+        // Recompute W and Wv^i
+        lorentz_W = 1.0 / (1.0 - vd_sq - SQR(v_par_updated));
+        w.vx = lorentz_W * (vd1 + v_par_updated * u.bx / Bnorm);
+        w.vy = lorentz_W * (vd2 + v_par_updated * u.by / Bnorm);
+        w.vz = lorentz_W * (vd3 + v_par_updated * u.bz / Bnorm);
+      }
+
+      // @YK : Apply Lorentz factor capping
+      // Rescale (W v^i), maintaining its direction
+      if (lorentz_W > eos.gamma_max) {
         vceiling_used = true;
-        Real factor = sqrt((SQR(eos.gamma_max)-1.0)/(SQR(lor)-1.0));
+        Real factor = sqrt((SQR(eos.gamma_max) - 1.0) / (SQR(lorentz_W) - 1.0));
         w.vx *= factor;
         w.vy *= factor;
         w.vz *= factor;
