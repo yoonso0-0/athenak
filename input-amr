@@ -1,0 +1,110 @@
+# Athena++ (Kokkos version) input file for circumbinary disk problem
+
+<comment>
+problem   = circumbinary disk mhd
+reference = Gardiner. T.A. & Stone, J.M., JCP, 205, 509 (2005) (for MHD version of test)
+
+<job>
+basename  = cbd      # problem ID: basename of output filenames
+
+<mesh>
+nghost    = 4         # Number of ghost cells
+
+nx1       = 384        # Number of zones in X1-direction
+x1min     = -80       # minimum value of X1
+x1max     = 80        # maximum value of X1
+
+ix1_bc    = user   # inner-X1 boundary flag
+ox1_bc    = user   # outer-X1 boundary flag
+
+nx2       = 384        # Number of zones in X2-direction
+x2min     = -80       # minimum value of X2
+x2max     = 80        # maximum value of X2
+
+ix2_bc    = user   # inner-X1 boundary flag
+ox2_bc    = user   # outer-X1 boundary flag
+
+nx3       = 384          # Number of zones in X3-direction
+x3min     = -80.0       # minimum value of X3
+x3max     =  80.0       # maximum value of X3
+
+ix3_bc    = user   # inner-X3 boundary flag
+ox3_bc    = user   # outer-X3 boundary flag
+
+<meshblock>
+nx1       = 64       # Number of cells in each MeshBlock, X1-dir
+nx2       = 64       # Number of cells in each MeshBlock, X2-dir
+nx3       = 64       # Number of cells in each MeshBlock, X3-dir
+
+<mesh_refinement>
+refinement = adaptive
+num_levels       = 3
+max_nmb_per_rank = 140
+refinement_interval = 1
+
+<time>
+evolution  = dynamic    # dynamic/kinematic/static
+integrator = rk2        # time integration algorithm
+cfl_number = 0.0        # The Courant, Friedrichs, & Lewy (CFL) Number
+nlim       = 5935312    # 1 step after the restart (Refine +1)
+tlim       = 10000        # time limit
+ndiag      = 1          # cycles between diagostic output
+
+<mhd>
+eos         = ideal      # EOS type
+reconstruct = ppm4        # spatial reconstruction method
+rsolver     = hlld       # Riemann-solver to be used
+gamma       = 1.66666666667  # gamma = C_p/C_v
+dfloor      = 1.e-9
+betafloor   = 0.001
+pfloor      = 1.e-9
+use_e       = true       # use temperature as primitives
+fofc        = true       # first-order flux correction
+
+<problem>
+binary      = true #false           # source-term: 0-central object; 1-binary 
+mhd         = true           # mhd: 0-hydro; 1-mhd
+damp        = false          # damping zone: 0-no; 1-yes
+
+decoupling        = true          # damping zone: 0-no; 1-yes
+a_over_M_decouple        = 113.3
+
+gm0         = 1.0
+r0          = 1.0
+rho0        = 1.0
+dslope      = 0.0
+rdamp       = 8.0
+ldamp       = 1.0
+mach        = 10.0
+q           = 1.0
+eps         = 0.1
+nu_iso      = 0.00
+
+sink_r      = 0.07
+sink_g      = 5.0
+
+dmax      = 10.0
+
+b_ini       = 1.e-3             # initial condition: B_z
+diskbeta    = 50
+ndiag       = 500
+user_hist   = true
+user_hist_only  = true
+hist_nr     = 100
+
+hist_nz = 1
+hist_phi = 1
+
+<output1>
+user_hist_only  = true
+file_type  = hst        # History data dump
+dt         = 0.314       # time increment between outputs
+
+<output2>
+file_type  = bin        # Binary data dump
+variable   = mhd_w_bcc    # variables to be output
+dcycle     = 1
+
+<output3>
+file_type  = rst        # History data dump
+dcycle     = 1

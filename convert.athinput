@@ -1,0 +1,71 @@
+
+<job>
+basename  = cbd_to_bhl
+
+<cbd_to_bhl_mapping>
+
+# Kick velocity of the remnant (0 <= v^2 < 1)
+v_kick_x    = 0.3
+v_kick_y    = 0.0
+v_kick_z    = 0.0
+
+a_over_rg  = 3
+
+grav_drag_mask_rmax = 1e10
+reset_time_and_filenumber = true
+
+<coord>
+general_rel = true
+a           = 0.9
+excise      = true
+dexcise     = 1.0e-10
+pexcise     = 0.333e-11
+
+<mhd> 
+#rsolver     = llf
+rsolver     = hlle
+#reconstruct = plm
+reconstruct = ppm4
+fofc        = true
+
+<mesh>
+# !!! Make sure this is original domain size * a_over_rg above !!!!
+x1min     = -240       # minimum value of X1
+x1max     = 240        # maximum value of X1
+x2min     = -240       # minimum value of X2
+x2max     = 240        # maximum value of X2
+x3min     = -240       # minimum value of X3
+x3max     = 240        # maximum value of X3
+
+ix1_bc    = outflow
+ox1_bc    = outflow
+ix2_bc    = outflow
+ox2_bc    = outflow
+ix3_bc    = outflow
+ox3_bc    = outflow
+
+<mesh_refinement>
+refinement = static
+
+<time>
+evolution  = dynamic     # dynamic/kinematic/static
+integrator = rk2         # time integration algorithm
+cfl_number = 0.35        # The Courant, Friedrichs, & Lewy (CFL) Number
+nlim       = -1          # cycle limit
+tlim       = 150         # time limit
+ndiag      = 1           # cycles between diagostic output
+
+<output1>
+user_hist_only  = true
+file_type       = hst
+dcycle          = 1
+
+<output2>
+file_type  = bin
+variable   = mhd_w_bcc
+dcycle     = 20
+#dt     = 1
+
+<output3>
+file_type  = rst
+dcycle     = 1000

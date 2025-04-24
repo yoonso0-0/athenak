@@ -1,0 +1,113 @@
+# Athena++ (Kokkos version) input file for MHD GR torus
+# Initializes Fishbone-Moncrief equilibrium torus used in EHT code comparison with
+# r_in=20 and r_peak=41 and MAD magnetic field configuration.  Uses static mesh refinement
+# with highest resolution 8/M at the horizon and the inner level spanning +/- 4M
+
+<comment>
+problem   = Fishbone-Moncrief equilibrium torus
+reference = Fishbone & Moncrief 1976, ApJ 207 962
+
+<job>
+basename  = BHL
+
+<mesh>
+nghost = 4        # Number of ghost cells
+nx1    = 256      # number of cells in x1-direction
+x1min  = -40960   # minimum x1
+x1max  = 40960    # maximum x1
+ix1_bc = user     # inner boundary
+ox1_bc = user     # outer boundary
+
+nx2    = 256      # number of cells in x2-direction
+x2min  = -40960   # minimum x2
+x2max  = 40960    # maximum x2
+ix2_bc = user     # inner boundary
+ox2_bc = user     # outer boundary
+
+nx3    = 256      # number of cells in x3-direction
+x3min  = -40960   # minimum x3
+x3max  = 40960    # maximum x3
+ix3_bc = user     # inner boundary
+ox3_bc = user     # outer boundary
+
+<meshblock>
+nx1  = 64          # Number of cells in each MeshBlock, X1-dir
+nx2  = 64          # Number of cells in each MeshBlock, X2-dir
+nx3  = 64          # Number of cells in each MeshBlock, X3-dir
+
+<mesh_refinement>
+refinement = static    # type of refinement
+
+<refinement2>
+level = 13
+x1min = -5.0
+x1max = 5.0
+x2min = -5.0
+x2max = 5.0
+x3min = -5.0
+x3max = 5.0
+
+<time>
+evolution  = dynamic     # dynamic/kinematic/static
+integrator = rk2         # time integration algorithm
+cfl_number = 0.25        # The Courant, Friedrichs, & Lewy (CFL) Number
+nlim       = -1          # cycle limit
+tlim       = 55000       # time limit
+ndiag      = 100         # cycles between diagostic output
+
+<coord>
+general_rel = true       # general relativity
+a           = 0.9        # black hole spin a (0 <= a/M < 1)
+excise      = true       # excise r_ks <= 1.0
+dexcise     = 1.0e-11    # density inside excision
+pexcise     = 0.333e-12  # pressure inside excision
+
+<mhd>
+eos         = ideal      # EOS type
+reconstruct = ppm4       # spatial reconstruction method
+rsolver     = hlle       # Riemann-solver to be used
+dfloor      = 1.0e-14    # floor on density rho
+pfloor      = 0.333e-15  # floor on gas pressure p_gas
+gamma       = 1.66666666666666  # ratio of specific heats Gamma
+fofc        = true       # Enable first order flux correction
+gamma_max   = 20.0       # Enable ceiling on Lorentz factor
+
+<problem>
+rho_max   = 1.0        # if > 0, rescale rho to have this peak; rescale pres by same factor
+user_hist = true       # enroll user-defined history function
+
+##### <Problem parameters> #####
+mach = 2.0
+Ra = 200.0
+rho_inf = 1.0
+
+sigma_inf = 3.0e-4
+magnetic_field_angle_yz = 1.57079632679 # 90 deg
+
+sigma_max = 50.0
+grav_drag_mask_rmax = 1e10   # Integrate over whole domain
+
+<turb_driving>
+sigma_variation_initial = false
+sigma_variation_inject_from_boundary = false
+dB_over_B_mag_inf = 1.0
+nlow = 1
+nhigh = 10
+tcorr = 128.0           # ~ (L / nhigh) / v_inf
+
+################################
+
+<output1>
+file_type  = hst        # History output
+dt         = 1.0       # time increment between outputs
+user_hist_only = true   # only output user-defined history
+data_format = %14.6e    # Optional data format string
+
+<output2>
+file_type  = bin        # Binary data dump
+variable   = mhd_w_bcc  # variables to be output
+dt         = 100.0      # time increment between outputs
+
+<output3>
+file_type  = rst
+dt         = 100.0      # time increment between outputs
