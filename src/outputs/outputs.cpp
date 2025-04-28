@@ -52,6 +52,9 @@
 #include "mesh/mesh.hpp"
 #include "outputs.hpp"
 
+#include "globals.hpp"
+
+
 //----------------------------------------------------------------------------------------
 // Outputs constructor
 
@@ -79,6 +82,19 @@ Outputs::Outputs(ParameterInput *pin, Mesh *pm) {
         opar.dt = pin->GetReal(opar.block_name,"dt");
         opar.dcycle = 0;
       }
+
+      // if (global_variable::my_rank == 0) {
+      //   std::cout << "\n opar.block_name : " << opar.block_name << std::endl;
+        
+      //   std::cout << pin->DoesParameterExist(opar.block_name, "dcycle")
+      //             << std::endl;
+      //   // std::cout << pin->GetInteger(opar.block_name, "dcycle") << std::endl;
+      //   // std::cout << pin->GetReal(opar.block_name, "dt") << std::endl;
+      //   std::cout << " opar.dcycle : " << opar.dcycle << std::endl;
+      //   std::cout << " opar.dt : " << opar.dt << std::endl;
+      //   std::cout << pin->GetReal(opar.block_name,"dt") << std::endl;
+
+      // }
 
       if (opar.dcycle == 0 && opar.dt <= 0.0) continue;  // only add output if dt>0
 

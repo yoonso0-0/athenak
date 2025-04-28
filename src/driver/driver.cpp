@@ -356,12 +356,29 @@ void Driver::Initialize(Mesh *pmesh, ParameterInput *pin, Outputs *pout, bool re
   //---- Step 3.  Cycle through output Types and load data / write files.
   if (!res_flag or reset_time_and_filenumber) {
     for (auto &out : pout->pout_list) {
-      
+
       // YK: reset file number counter to zero
       out->out_params.file_number = 0;
+      out->out_params.last_time = 0.0;
 
       out->LoadOutputData(pmesh);
       out->WriteOutputFile(pmesh, pin);
+    }
+  }
+
+  if (global_variable::my_rank == 0) {
+    for (auto &out : pout->pout_list) {
+      std::cout << " block_name : " << out->out_params.block_name << std::endl;
+      std::cout << "  Output.last_time : " << out->out_params.last_time
+                << std::endl;
+      std::cout << "  Output.dt : " << out->out_params.dt << std::endl;
+      std::cout << "  Output.dcycle : " << out->out_params.dcycle << std::endl;
+      std::cout << "  Output.file_number : " << out->out_params.file_number
+                << std::endl;
+      std::cout << "  Output.file_type : " << out->out_params.file_type
+                << std::endl;
+      std::cout << "  Output.file_id : " << out->out_params.file_id
+                << std::endl;
     }
   }
 
