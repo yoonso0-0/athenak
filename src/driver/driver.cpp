@@ -313,6 +313,24 @@ void Driver::Initialize(Mesh *pmesh, ParameterInput *pin, Outputs *pout, bool re
   //---- Step 1.  Set conserved variables in ghost zones for all physics
   InitBoundaryValuesAndPrimitives(pmesh);
 
+  //
+  // Reset time, cycle, dt, ... to zero
+  //
+  const bool reset_time_and_filenumber =
+      pin->GetBoolean("cbd_to_bhl_mapping", "reset_time_and_filenumber");
+
+  if (reset_time_and_filenumber) {
+
+    if (global_variable::my_rank == 0) {
+      std::cout << " Resetting dt, time, ncycle ... (Driver::Initialize) " << std::endl;
+    }
+
+    pmesh->dt = std::numeric_limits<float>::max();
+    pmesh->time = 0.0;
+    pmesh->ncycle = 0;
+    pmesh->ecounter = EventCounters{};
+  }
+
   //---- Step 2.  Compute time step (if problem involves time evolution)
   hydro::Hydro *phydro = pmesh->pmb_pack->phydro;
   mhd::MHD *pmhd = pmesh->pmb_pack->pmhd;
@@ -336,8 +354,12 @@ void Driver::Initialize(Mesh *pmesh, ParameterInput *pin, Outputs *pout, bool re
   }
 
   //---- Step 3.  Cycle through output Types and load data / write files.
-  if (!res_flag) { // only write outputs at the beginning of the run
+  if (!res_flag or reset_time_and_filenumber) {
     for (auto &out : pout->pout_list) {
+      
+      // YK: reset file number counter to zero
+      out->out_params.file_number = 0;
+
       out->LoadOutputData(pmesh);
       out->WriteOutputFile(pmesh, pin);
     }
