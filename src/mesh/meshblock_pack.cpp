@@ -81,7 +81,7 @@ MeshBlockPack::~MeshBlockPack() {
 //! Allows for passing of pointer to 'this' pack.
 
 void MeshBlockPack::AddMeshBlocks(ParameterInput *pin) {
-  pmb = new MeshBlock(this, gids, nmb_thispack);
+  pmb = new MeshBlock(this, gids, nmb_thispack, pin); // YK: constructor is changed to heck. see meshblock.cpp
 }
 
 //----------------------------------------------------------------------------------------

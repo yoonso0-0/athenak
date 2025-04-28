@@ -313,6 +313,13 @@ void Driver::Initialize(Mesh *pmesh, ParameterInput *pin, Outputs *pout, bool re
   //---- Step 1.  Set conserved variables in ghost zones for all physics
   InitBoundaryValuesAndPrimitives(pmesh);
 
+  // YK: manipulating primitive variables here
+  mhd::MHD *pmhd = pmesh->pmb_pack->pmhd;
+  // Add kick velocity to primitive var, and update conservatives
+  (void)pmhd->RescaleAndAddRecoil(pin);
+  // Send out U again for ghost zones
+  InitBoundaryValuesAndPrimitives(pmesh);
+
   //
   // Reset time, cycle, dt, ... to zero
   //
@@ -322,7 +329,8 @@ void Driver::Initialize(Mesh *pmesh, ParameterInput *pin, Outputs *pout, bool re
   if (reset_time_and_filenumber) {
 
     if (global_variable::my_rank == 0) {
-      std::cout << " Resetting dt, time, ncycle ... (Driver::Initialize) " << std::endl;
+      std::cout << " Resetting dt, time, ncycle ... (Driver::Initialize) "
+                << std::endl;
     }
 
     pmesh->dt = std::numeric_limits<float>::max();
@@ -333,7 +341,7 @@ void Driver::Initialize(Mesh *pmesh, ParameterInput *pin, Outputs *pout, bool re
 
   //---- Step 2.  Compute time step (if problem involves time evolution)
   hydro::Hydro *phydro = pmesh->pmb_pack->phydro;
-  mhd::MHD *pmhd = pmesh->pmb_pack->pmhd;
+  // mhd::MHD *pmhd = pmesh->pmb_pack->pmhd;
   radiation::Radiation *prad = pmesh->pmb_pack->prad;
   z4c::Z4c *pz4c = pmesh->pmb_pack->pz4c;
   if (time_evolution != TimeEvolution::tstatic) {
@@ -657,6 +665,9 @@ void Driver::InitBoundaryValuesAndPrimitives(Mesh *pm) {
     (void) pmhd->ApplyPhysicalBCs(this, 0);
     (void) pmhd->Prolongate(this, 0);
     if (pdyngr == nullptr) {
+      if (global_variable::my_rank == 0) {
+        std::cout << "  ** Running initial Con2Prim " << std::endl;
+      }
       (void) pmhd->ConToPrim(this, 0);
     } else {
       if (pz4c != nullptr) {

@@ -320,6 +320,11 @@ int main(int argc, char *argv[]) {
     // set ICs using ProblemGenerator constructor for new runs
     pmesh->pgen = std::make_unique<ProblemGenerator>(pinput, pmesh);
   } else {
+
+    if (global_variable::my_rank == 0) {
+      std::cout << " reading ICs from restart file ... (main()) " << std::endl;
+    }
+
     // read ICs from restart file using ProblemGenerator constructor for restarts
     pmesh->pgen = std::make_unique<ProblemGenerator>(pinput,
                                                      pmesh,

@@ -83,21 +83,33 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
               << std::endl;
   }
 
+  //
+  // YK: this pgen file doesn't really do anything, other than forcing
+  // coordinate type gr=true. Rescaling/mapping MHD primitive variables and
+  // coordinates are handled by other parts of the code.
+  //
+
   if (not restart) {
     std::cout << "### FATAL ERROR in " << __FILE__ << " at line " << __LINE__
               << std::endl
-              << " Are you restarting from a rst file?" << std::endl;
+              << "\n You should be restarting from a rst file " << std::endl;
     exit(EXIT_FAILURE);
   }
 
-  if (pmbp->pcoord->is_general_relativistic) {
+  // if (pmbp->pcoord->is_general_relativistic) {
+  //   std::cout << "### FATAL ERROR in " << __FILE__ << " at line " << __LINE__
+  //             << std::endl
+  //             << "\n You cannot restart from non-GR coord" << std::endl;
+  //   exit(EXIT_FAILURE);
+  // }
+
+  if (pmbp->prad != nullptr) {
     std::cout << "### FATAL ERROR in " << __FILE__ << " at line " << __LINE__
               << std::endl
-              << "Are you really restarting from a Newtonian sim data?"
-              << std::endl;
-    exit(EXIT_FAILURE);
+              << " Radiation should not be enabled" << std::endl;
   }
 
+  // Overwrite coordinate information
   pmbp->pcoord->is_general_relativistic = true;
 
   // User boundary function
@@ -111,17 +123,27 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
   int nmb = pmbp->nmb_thispack;
   auto &coord = pmbp->pcoord->coord_data;
 
-  //****************************************************************
-  std::cout << " Okay upto here" << std::endl;
-  exit(EXIT_FAILURE);
-  //****************************************************************
-
-  // Extract BH parameters
+  // coord.bh_spin = pin->GetReal("cbd_to_bhl_mapping", "spin");
+  // coord.bh_excise = pin->GetBoolean("cbd_to_bhl_mapping", "excise");
+  // coord.dexcise = pin->GetReal("cbd_to_bhl_mapping", "dexcise");
+  // coord.pexcise = pin->GetReal("cbd_to_bhl_mapping", "pexcise");
   cbd_to_bhl_converter.spin = coord.bh_spin;
-  const Real r_excise = coord.rexcise;
-  const bool is_radiation_enabled = (pmbp->prad != nullptr);
+  // cbd_to_bhl_converter.dexcise = coord.dexcise;
+  // cbd_to_bhl_converter.pexcise = coord.pexcise;
 
-  if (is_radiation_enabled) {
+  cbd_to_bhl_converter.v_kick_x =
+      pin->GetReal("cbd_to_bhl_mapping", "v_kick_x");
+  cbd_to_bhl_converter.v_kick_y =
+      pin->GetReal("cbd_to_bhl_mapping", "v_kick_y");
+  cbd_to_bhl_converter.v_kick_z =
+      pin->GetReal("cbd_to_bhl_mapping", "v_kick_z");
+
+  const Real vx = cbd_to_bhl_converter.v_kick_x;
+  const Real vy = cbd_to_bhl_converter.v_kick_y;
+  const Real vz = cbd_to_bhl_converter.v_kick_z;
+  const Real v_squared = SQR(vx) + SQR(vy) + SQR(vz);
+
+  if (pmbp->prad != nullptr) {
     std::cout << "### FATAL ERROR in " << __FILE__ << " at line " << __LINE__
               << std::endl
               << " Radiation should not be enabled" << std::endl;
@@ -131,11 +153,11 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
   auto &grids = spherical_grids;
   const Real r_plus = 1.0 + sqrt(1.0 - SQR(cbd_to_bhl_converter.spin));
   grids.push_back(std::make_unique<SphericalGrid>(pmbp, 5, r_plus));
-  grids.push_back(std::make_unique<SphericalGrid>(pmbp, 5, 2.0));
-  grids.push_back(std::make_unique<SphericalGrid>(pmbp, 5, 3.0));
-  grids.push_back(std::make_unique<SphericalGrid>(pmbp, 5, 4.0));
-  grids.push_back(std::make_unique<SphericalGrid>(pmbp, 5, 5.0));
-  grids.push_back(std::make_unique<SphericalGrid>(pmbp, 5, 10.0));
+  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, 5, 2.0));
+  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, 5, 3.0));
+  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, 5, 4.0));
+  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, 5, 5.0));
+  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, 5, 10.0));
   // grids.push_back(std::make_unique<SphericalGrid>(pmbp, 5, 20.0));
   // grids.push_back(std::make_unique<SphericalGrid>(pmbp, 5, 50.0));
   // grids.push_back(std::make_unique<SphericalGrid>(pmbp, 5, 100.0));
@@ -151,12 +173,6 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
     w0_ = pmbp->pmhd->w0;
   }
 
-  // Extract radiation parameters if enabled
-  int nangles_;
-  DualArray2D<Real> nh_c_;
-  DvceArray6D<Real> norm_to_tet_, tet_c_, tetcov_c_;
-  DvceArray5D<Real> i0_;
-
   // Get ideal gas EOS data
   if (pmbp->phydro != nullptr) {
     cbd_to_bhl_converter.gamma_adi = pmbp->phydro->peos->eos_data.gamma;
@@ -165,144 +181,20 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
   }
   Real gamma_minus_one = cbd_to_bhl_converter.gamma_adi - 1.0;
 
-  // Read problem-specific parameters from input file global parameters
-  // cbd_to_bhl_converter.mach = pin->GetReal("problem", "mach");
-  // cbd_to_bhl_converter.Ra = pin->GetReal("problem", "Ra");
-  // cbd_to_bhl_converter.rho_inf = pin->GetReal("problem", "rho_inf");
-
-  // excision parameters
-  cbd_to_bhl_converter.dexcise = coord.dexcise;
-  cbd_to_bhl_converter.pexcise = coord.pexcise;
-
   // Gravitational drag - Mask
   cbd_to_bhl_converter.grav_drag_mask_rmax =
-      pin->GetReal("problem", "grav_drag_mask_rmax");
+      pin->GetReal("cbd_to_bhl_mapping", "grav_drag_mask_rmax");
 
-  //  ---------------------------------------
-  //    Compute auxiliary variables
-  //  ---------------------------------------
-
-  // if (global_variable::my_rank == 0) {
-  //   std::cout << " **** Initializing BHL variables **** " << std::endl;
-  //   std::cout << "  v_inf        = " << cbd_to_bhl_converter.v_inf <<
-  //   std::endl; std::cout << "  rho_inf      = " <<
-  //   cbd_to_bhl_converter.rho_inf
-  //             << std::endl;
-  //   std::cout << "  cs_inf       = " << cbd_to_bhl_converter.cs_inf
-  //             << std::endl;
-  //   std::cout << "  e_inf        = " << cbd_to_bhl_converter.e_inf <<
-  //   std::endl; std::cout << "  pressure_inf = " <<
-  //   cbd_to_bhl_converter.pressure_inf
-  //             << std::endl;
-  //   std::cout << "" << std::endl;
-  //   std::cout << "  B_mag_inf    = " << cbd_to_bhl_converter.B_mag_inf
-  //             << std::endl;
-  //   std::cout << "  Sigma_inf    = " << cbd_to_bhl_converter.sigma_inf
-  //             << std::endl;
-  //   std::cout << "  Beta_inf     = "
-  //             << cbd_to_bhl_converter.pressure_inf /
-  //                    (0.5 * cbd_to_bhl_converter.comoving_b2)
-  //             << std::endl;
-  //   std::cout << "  Initial B variation  = "
-  //             << cbd_to_bhl_converter.sigma_variation_initial << std::endl;
-  //   std::cout << "  Inject B variation from boundary  = "
-  //             << cbd_to_bhl_converter.sigma_variation_inject_from_boundary
-  //             << std::endl;
-  // }
-
-  // return if restart
-  if (restart)
-    return;
-
-  auto bhl = cbd_to_bhl_converter;
-  auto &size = pmbp->pmb->mb_size;
-
-  // Kokkos::parallel_reduce(
-  //     "initial_hydro_profile", Kokkos::RangePolicy<>(DevExeSpace(), 0,
-  //     nmkji), KOKKOS_LAMBDA(const int &idx, Real &max_ptot) {
-  //       //
-  //       // @YK : memo on index notations
-  //       //
-  //       // `m` : index of a MeshBlock.
-  //       // `nkji` : value of (Nx x Ny x Nz) in a MeshBlock
-  //       // `nmkji' : `nkji` times number of MeshBlocks in the current
-  //       // MeshBlockPack
-  //       //
-  //       // `idx` : Looks like a single integer index for a whole (giant)
-  //       array
-  //       // of
-  //       //         quantities stored in this meshblockpack..
-  //       //
-
-  //       // compute m,k,j,i indices of thread and call function
-  //       int m = (idx) / nkji;
-  //       int k = (idx - m * nkji) / nji;
-  //       int j = (idx - m * nkji - k * nji) / indcs.nx1;
-  //       int i = (idx - m * nkji - k * nji - j * indcs.nx1) + is;
-  //       k += ks;
-  //       j += js;
-
-  //       Real &x1min = size.d_view(m).x1min;
-  //       Real &x1max = size.d_view(m).x1max;
-  //       Real x1v = CellCenterX(i - is, indcs.nx1, x1min, x1max);
-
-  //       Real &x2min = size.d_view(m).x2min;
-  //       Real &x2max = size.d_view(m).x2max;
-  //       Real x2v = CellCenterX(j - js, indcs.nx2, x2min, x2max);
-
-  //       Real &x3min = size.d_view(m).x3min;
-  //       Real &x3max = size.d_view(m).x3max;
-  //       Real x3v = CellCenterX(k - ks, indcs.nx3, x3min, x3max);
-
-  //       // Extract metric and inverse
-  //       Real glower[4][4], gupper[4][4];
-  //       ComputeMetricAndInverse(x1v, x2v, x3v, coord.is_minkowski,
-  //                               coord.bh_spin, glower, gupper);
-
-  //       // Calculate Boyer-Lindquist coordinates of cell
-  //       Real r, theta, phi;
-  //       GetBoyerLindquistCoordinates(bhl, x1v, x2v, x3v, &r, &theta, &phi);
-  //       Real sin_theta = sin(theta);
-  //       Real cos_theta = cos(theta);
-  //       Real sin_phi = sin(phi);
-  //       Real cos_phi = cos(phi);
-
-  //       Real rho_init, e_init;
-
-  //       if (r > 1.0) {
-  //         rho_init = bhl.rho_inf;
-  //         e_init = bhl.e_inf;
-  //         // e_init = (bhl.total_pressure_inf - magnetic_pressure) / gm1;
-  //       } else {
-  //         rho_init = bhl.dexcise;
-  //         e_init = bhl.pexcise / gm1;
-  //       }
-
-  //       // Set hydro primitive variables. Internal energy e_init is adjusted
-  //       to
-  //       // match the total pressure equilibrium.
-  //       w0_(m, IDN, k, j, i) = rho_init;
-  //       w0_(m, IEN, k, j, i) = e_init;
-
-  //       w0_(m, IVX, k, j, i) = -bhl.u1_prim_inf;
-  //       w0_(m, IVY, k, j, i) = 0.0;
-  //       w0_(m, IVZ, k, j, i) = 0.0;
-
-  //       // Compute total pressure (equal to gas pressure in non-radiating
-  //       runs) Real ptot = gm1 * w0_(m, IEN, k, j, i); if
-  //       (is_radiation_enabled)
-  //         // ptot += urad / 3.0;
-  //         max_ptot = fmax(ptot, max_ptot);
-  //     },
-  //     Kokkos::Max<Real>(ptotmax));
-
-  // Convert primitives to conserved
-  if (pmbp->phydro != nullptr) {
-    pmbp->phydro->peos->PrimToCons(w0_, u0_, is, ie, js, je, ks, ke);
-  } else if (pmbp->pmhd != nullptr) {
-    auto &bcc0_ = pmbp->pmhd->bcc0;
-    pmbp->pmhd->peos->PrimToCons(w0_, bcc0_, u0_, is, ie, js, je, ks, ke);
+  //****************************************************************
+  if (global_variable::my_rank == 0) {
+    std::cout << " BH spin = " << coord.bh_spin << std::endl;
+    std::cout << " Horizon radius = " << r_plus << std::endl;
+    std::cout << " EOS gamma = " << cbd_to_bhl_converter.gamma_adi << std::endl;
+    std::cout << " Kick v^i = (" << vx << ", " << vy << ", " << vz << ")"
+              << std::endl;
   }
+  // exit(EXIT_FAILURE);
+  //****************************************************************
 
   return;
 }
