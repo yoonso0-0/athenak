@@ -17,12 +17,14 @@
 #include "nghbr_index.hpp"
 #include "meshblock.hpp"
 
+#include "globals.hpp"
+
 //----------------------------------------------------------------------------------------
 // MeshBlock constructor:
 // Initializes mb_gid, mb_lev, mb_size, mb_bcs arrays.  The nghbrs array is initialized
 // by SetNeighbors function called by BuildTree***() functions.
 
-MeshBlock::MeshBlock(MeshBlockPack* ppack, int igids, int nmb) :
+MeshBlock::MeshBlock(MeshBlockPack* ppack, int igids, int nmb, ParameterInput *pin) :
   pmy_pack(ppack),
   mb_gid("mb_gid",nmb),
   mb_lev("mb_lev",nmb),
@@ -30,6 +32,13 @@ MeshBlock::MeshBlock(MeshBlockPack* ppack, int igids, int nmb) :
   mb_bcs("mbbcs",nmb,6) {
   Mesh* pm = pmy_pack->pmesh;
   auto &ms = pm->mesh_size;
+
+  // YK: Read rescaling ratio (a/r_g) from the input file
+  const Real length_scale = pin->GetReal("cbd_to_bhl_mapping", "a_over_rg");
+  if (global_variable::my_rank == 0) {
+    std::cout << "\n\n - Rescaling length = " << length_scale
+              << " (Meshblock::Meshblock)" << std::endl;
+  }
 
   for (int m=0; m<nmb; ++m) {
     // initialize host array elements of gids, levels
@@ -109,6 +118,14 @@ MeshBlock::MeshBlock(MeshBlockPack* ppack, int igids, int nmb) :
       }
     }
 
+    // YK: Rescale meshblock extents
+    mb_size.h_view(m).x1min *= length_scale;
+    mb_size.h_view(m).x1max *= length_scale;
+    mb_size.h_view(m).x2min *= length_scale;
+    mb_size.h_view(m).x2max *= length_scale;
+    mb_size.h_view(m).x3min *= length_scale;
+    mb_size.h_view(m).x3max *= length_scale;
+
     // grid spacing at this level.
     mb_size.h_view(m).dx1 = (mb_size.h_view(m).x1max - mb_size.h_view(m).x1min)/
                             static_cast<Real>(pm->mb_indcs.nx1);
@@ -116,6 +133,24 @@ MeshBlock::MeshBlock(MeshBlockPack* ppack, int igids, int nmb) :
                             static_cast<Real>(pm->mb_indcs.nx2);
     mb_size.h_view(m).dx3 = (mb_size.h_view(m).x3max - mb_size.h_view(m).x3min)/
                             static_cast<Real>(pm->mb_indcs.nx3);
+
+    // std::cout << m << ", " << mb_size.h_view(m).x1min << ", "
+    //           << mb_size.h_view(m).x1max << ", " << mb_size.h_view(m).x2min
+    //           << ", " << mb_size.h_view(m).x2max << ", "
+    //           << mb_size.h_view(m).x3min << ", " << mb_size.h_view(m).x3max
+    //           << ", " << std::endl;
+  }
+
+  // YK: Rescale whole mesh size
+  ms.x1min *= length_scale;
+  ms.x1max *= length_scale;
+  ms.x2min *= length_scale;
+  ms.x2max *= length_scale;
+  ms.x3min *= length_scale;
+  ms.x3max *= length_scale;
+
+  if (global_variable::my_rank == 0) {
+    std::cout << "  Mesh rescaling completed" << std::endl;
   }
 
   // For each DualArray: mark host views as modified, and then sync to device array

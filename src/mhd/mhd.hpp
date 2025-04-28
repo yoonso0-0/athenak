@@ -187,6 +187,9 @@ class MHD {
   TaskStatus ClearSend(Driver *d, int stage);
   TaskStatus ClearRecv(Driver *d, int stage);  // also in Driver::Initialize
 
+  // YK: For CBD -> BHL conversion
+  TaskStatus RescaleAndAddRecoil(ParameterInput *pin);
+
   // CalculateFluxes function templated over Riemann Solvers
   template <MHD_RSolver T>
   void CalculateFluxes(Driver *d, int stage);

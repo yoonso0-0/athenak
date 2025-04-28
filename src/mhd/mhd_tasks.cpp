@@ -6,6 +6,7 @@
 //! \file mhd_tasks.cpp
 //! \brief functions that control MHD tasks stored in tasklists in MeshBlockPack
 
+#include <cmath>
 #include <map>
 #include <memory>
 #include <string>
@@ -26,6 +27,9 @@
 #include "shearing_box/shearing_box.hpp"
 #include "mhd/mhd.hpp"
 #include "dyn_grmhd/dyn_grmhd.hpp"
+
+#include "coordinates/cartesian_ks.hpp"
+#include "eos/ideal_c2p_mhd.hpp"
 
 namespace mhd {
 //----------------------------------------------------------------------------------------
@@ -524,6 +528,176 @@ TaskStatus MHD::ConToPrim(Driver *pdrive, int stage) {
   peos->ConsToPrim(u0, b0, w0, bcc0, false, 0, n1m1, 0, n2m1, 0, n3m1);
   return TaskStatus::complete;
 }
+
+// ===========================================================================
+//  YK: this task manipulates primitive variables.
+// 
+TaskStatus MHD::RescaleAndAddRecoil(ParameterInput *pin) {
+
+  if (global_variable::my_rank == 0) {
+    std::cout << "  ** Rescaling primitives and adding recoil ...."
+              << std::endl;
+  }
+
+  auto &pmbp = pmy_pack->pmesh->pmb_pack;
+
+  // Parse a_over_rg from input
+  const Real a_over_rg = pin->GetReal("cbd_to_bhl_mapping", "a_over_rg");
+
+  // YK: fix this later. Need to talk with Elias on correct scaling
+  // const Real rho0_over_rho_infty = 0.1;  // YK: rescale to have max 1.0 at the beginning..
+  const Real rho0_over_rho_infty = 1.0; // YK: do nothing?
+
+  // Parse kick velocity from input file
+  const Real vk_x = pin->GetReal("cbd_to_bhl_mapping", "v_kick_x");
+  const Real vk_y = pin->GetReal("cbd_to_bhl_mapping", "v_kick_y");
+  const Real vk_z = pin->GetReal("cbd_to_bhl_mapping", "v_kick_z");
+  const Real v_squared = SQR(vk_x) + SQR(vk_y) + SQR(vk_z);
+
+  // capture variables for kernel
+  auto &indcs = pmy_pack->pmesh->mb_indcs;
+  int is = indcs.is, js = indcs.js, ks = indcs.ks;
+  int ie = indcs.ie, je = indcs.je, ke = indcs.ke;
+  int nmb = pmbp->nmb_thispack;
+  auto &coord = pmbp->pcoord->coord_data;
+
+  auto &size = pmbp->pmb->mb_size;
+
+  // MHD primitives
+  auto &w0_ = pmbp->pmhd->w0;
+  // MHD evolved vars
+  auto &u0_ = pmbp->pmhd->u0;
+
+  // Magnetic fields, face-centered and cell-centered
+  auto &b0 = pmbp->pmhd->b0;
+  auto &bcc_ = pmbp->pmhd->bcc0;
+
+  const auto &spin = coord.bh_spin;
+  const auto &flat = coord.is_minkowski;
+
+  const Real &gamma = pmy_pack->pmhd->peos->eos_data.gamma;
+
+  par_for(
+      "cbd_to_bhl", DevExeSpace(), 0, (pmbp->nmb_thispack - 1), ks, ke, js, je,
+      is, ie, KOKKOS_LAMBDA(int m, int k, int j, int i) {
+        Real &x1min = size.d_view(m).x1min;
+        Real &x1max = size.d_view(m).x1max;
+        int nx1 = indcs.nx1;
+        Real x1v = CellCenterX(i - is, nx1, x1min, x1max);
+
+        Real &x2min = size.d_view(m).x2min;
+        Real &x2max = size.d_view(m).x2max;
+        int nx2 = indcs.nx2;
+        Real x2v = CellCenterX(j - js, nx2, x2min, x2max);
+
+        Real &x3min = size.d_view(m).x3min;
+        Real &x3max = size.d_view(m).x3max;
+        int nx3 = indcs.nx3;
+        Real x3v = CellCenterX(k - ks, nx3, x3min, x3max);
+
+        // Compute metric coefficients of KS -- need later for P2C
+        Real glower[4][4], gupper[4][4];
+        ComputeMetricAndInverse(x1v, x2v, x3v, flat, spin, glower, gupper);
+
+        // if (m == 100 and i == 4 and j == 4 and k == 4) {
+        // std::cout << i << ", " << j << ", " << k << std::endl;
+        // std::cout << nx1 << ", " << nx2 << ", " <<nx3 << std::endl;
+        // std::cout << " dens = " << w0_(m, IDN, k, j, i) << std::endl;
+        // std::cout << " v_x  = " << w0_(m, IVX, k, j, i) << std::endl;
+        // std::cout << " v_y  = " << w0_(m, IVY, k, j, i) << std::endl;
+        // std::cout << " v_z  = " << w0_(m, IVZ, k, j, i) << std::endl;
+        // std::cout << " eint = " << w0_(m, IEN, k, j, i) << std::endl;
+
+        // std::cout << " Bx = " << bcc_(m,IBX,k,j,i) << std::endl;
+        // std::cout << " By = " << bcc_(m,IBY,k,j,i) << std::endl;
+        // std::cout << " Bz = " << bcc_(m,IBZ,k,j,i) << std::endl;
+
+        // std::cout << "\n" << std::endl;
+        // }
+
+
+        // Rescale hydro primitives
+        w0_(m, IDN, k, j, i) *= rho0_over_rho_infty;
+        w0_(m, IVX, k, j, i) /= std::sqrt(a_over_rg);
+        w0_(m, IVY, k, j, i) /= std::sqrt(a_over_rg);
+        w0_(m, IVZ, k, j, i) /= std::sqrt(a_over_rg);
+        w0_(m, IEN, k, j, i) *= rho0_over_rho_infty / a_over_rg;
+
+        // Cell-centered magnetic fields
+        bcc_(m, IBX, k, j, i) *= std::sqrt(rho0_over_rho_infty / a_over_rg);
+        bcc_(m, IBY, k, j, i) *= std::sqrt(rho0_over_rho_infty / a_over_rg);
+        bcc_(m, IBZ, k, j, i) *= std::sqrt(rho0_over_rho_infty / a_over_rg);
+
+        // Face-centered magnetic fields
+        b0.x1f(m, k, j, i) *= std::sqrt(rho0_over_rho_infty / a_over_rg);
+        b0.x2f(m, k, j, i) *= std::sqrt(rho0_over_rho_infty / a_over_rg);
+        b0.x3f(m, k, j, i) *= std::sqrt(rho0_over_rho_infty / a_over_rg);
+        // Include extra face-component at edges of the meshblock
+        if (i == ie) {
+          b0.x1f(m, k, j, i + 1) *= std::sqrt(rho0_over_rho_infty / a_over_rg);
+        }
+        if (j == je) {
+          b0.x2f(m, k, j + 1, i) *= std::sqrt(rho0_over_rho_infty / a_over_rg);
+        }
+        if (k == ke) {
+          b0.x3f(m, k + 1, j, i) *= std::sqrt(rho0_over_rho_infty / a_over_rg);
+        }
+
+        // Add kick
+        w0_(m, IVX, k, j, i) -= vk_x;
+        w0_(m, IVY, k, j, i) -= vk_y;
+        w0_(m, IVZ, k, j, i) -= vk_z;
+
+        // if (m == 100 and i == 4 and j == 4 and k == 4) {
+        // std::cout << i << ", " << j << ", " << k << std::endl;
+        // std::cout << nx1 << ", " << nx2 << ", " <<nx3 << std::endl;
+        // std::cout << " dens = " << w0_(m, IDN, k, j, i) << std::endl;
+        // std::cout << " v_x  = " << w0_(m, IVX, k, j, i) << std::endl;
+        // std::cout << " v_y  = " << w0_(m, IVY, k, j, i) << std::endl;
+        // std::cout << " v_z  = " << w0_(m, IVZ, k, j, i) << std::endl;
+        // std::cout << " eint = " << w0_(m, IEN, k, j, i) << std::endl;
+
+        // std::cout << " Bx = " << bcc_(m, IBX, k, j, i) << std::endl;
+        // std::cout << " By = " << bcc_(m, IBY, k, j, i) << std::endl;
+        // std::cout << " Bz = " << bcc_(m, IBZ, k, j, i) << std::endl;
+        // }
+
+        // Update conservatives from the modified primitives
+        MHDPrim1D w;
+        w.d = w0_(m, IDN, k, j, i);
+        w.vx = w0_(m, IVX, k, j, i);
+        w.vy = w0_(m, IVY, k, j, i);
+        w.vz = w0_(m, IVZ, k, j, i);
+        w.e = w0_(m, IEN, k, j, i);
+        w.bx = bcc_(m, IBX, k, j, i);
+        w.by = bcc_(m, IBY, k, j, i);
+        w.bz = bcc_(m, IBZ, k, j, i);
+
+        HydCons1D u;
+        SingleP2C_IdealGRMHD(glower, gupper, w, gamma, u);
+        u0_(m, IDN, k, j, i) = u.d;
+        u0_(m, IM1, k, j, i) = u.mx;
+        u0_(m, IM2, k, j, i) = u.my;
+        u0_(m, IM3, k, j, i) = u.mz;
+        u0_(m, IEN, k, j, i) = u.e;
+
+        // if (m == 100 and i == 4 and j == 4 and k == 4) {
+        //   std::cout << " D   = " << u.d << std::endl;
+        //   std::cout << " Mx  = " << u.mx << std::endl;
+        //   std::cout << " My  = " << u.my << std::endl;
+        //   std::cout << " Mz  = " << u.mz << std::endl;
+        //   std::cout << " E   = " << u.e << std::endl;
+
+        //   std::cout << " Bx = " << w.bx << std::endl;
+        //   std::cout << " By = " << w.by << std::endl;
+        //   std::cout << " Bz = " << w.bz << std::endl;
+        // }
+      });
+
+  return TaskStatus::complete;
+}
+// ===========================================================================
+
 
 //----------------------------------------------------------------------------------------
 //! \fn TaskStatus MHD::ClearSend

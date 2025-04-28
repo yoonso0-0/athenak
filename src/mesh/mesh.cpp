@@ -437,7 +437,7 @@ void Mesh::WriteMeshStructure() {
   for (int i=root_level; i<=max_level; i++) {
     for (int j=0; j<nmb_total; j++) {
       if (lloc_eachmb[j].level == i) {
-        MeshBlock block(this->pmb_pack, j, 1);
+        MeshBlock block(this->pmb_pack, j, 1, nullptr); // YK: constructor is changed to heck. see meshblock.cpp
         std::int32_t &lx1 = lloc_eachmb[j].lx1;
         std::int32_t &lx2 = lloc_eachmb[j].lx2;
         std::int32_t &lx3 = lloc_eachmb[j].lx3;

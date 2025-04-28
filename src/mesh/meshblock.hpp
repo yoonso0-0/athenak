@@ -28,7 +28,7 @@ class MeshBlock {
   friend class MeshBlockTree;
 
  public:
-  MeshBlock(MeshBlockPack *ppack, int igids, int nmb);
+  MeshBlock(MeshBlockPack *ppack, int igids, int nmb, ParameterInput *pin); // YK: constructor is changed to heck
   ~MeshBlock() {}  // only default destructor needed
 
   // data
