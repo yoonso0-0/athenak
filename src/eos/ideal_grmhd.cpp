@@ -102,6 +102,35 @@ void IdealGRMHD::ConsToPrim(DvceArray5D<Real> &cons, const DvceFaceFld4D<Real> &
       u.bz = 0.5*(b.x3f(m,k,j,i) + b.x3f(m,k+1,j,i));
     }
 
+    // if (m == 190 and i == 4 and j == 4 and k == 4) {
+    //   // std::cout << i << ", " << j << ", " << k << std::endl;
+    //   // std::cout << nx1 << ", " << nx2 << ", " << nx3 << std::endl;
+    //   std::cout << " Ideal GRMHD:: before C2P (prims) " << std::endl;
+
+    //   std::cout << " dens = " << prim(m, IDN, k, j, i) << std::endl;
+    //   std::cout << " v_x  = " << prim(m, IVX, k, j, i) << std::endl;
+    //   std::cout << " v_y  = " << prim(m, IVY, k, j, i) << std::endl;
+    //   std::cout << " v_z  = " << prim(m, IVZ, k, j, i) << std::endl;
+    //   std::cout << " eint = " << prim(m, IEN, k, j, i) << std::endl;
+
+    //   std::cout << " Bx = " << bcc(m, IBX, k, j, i) << std::endl;
+    //   std::cout << " By = " << bcc(m, IBY, k, j, i) << std::endl;
+    //   std::cout << " Bz = " << bcc(m, IBZ, k, j, i) << std::endl;
+
+    //   std::cout << " Ideal GRMHD:: before C2P (cons) " << std::endl;
+    //   std::cout << " D   = " << u.d << std::endl;
+    //   std::cout << " Mx  = " << u.mx << std::endl;
+    //   std::cout << " My  = " << u.my << std::endl;
+    //   std::cout << " Mz  = " << u.mz << std::endl;
+    //   std::cout << " E   = " << u.e << std::endl;
+
+    //   std::cout << " Bx = " << u.bx << std::endl;
+    //   std::cout << " By = " << u.by << std::endl;
+    //   std::cout << " Bz = " << u.bz << std::endl;
+
+    //   std::cout << "\n" << std::endl;
+    // }
+
     // Extract components of metric
     Real &x1min = size.d_view(m).x1min;
     Real &x1max = size.d_view(m).x1max;
@@ -262,6 +291,24 @@ void IdealGRMHD::ConsToPrim(DvceArray5D<Real> &cons, const DvceFaceFld4D<Real> &
         w.vz *= factor;
       }
     }
+
+    // if (m == 190 and i == 4 and j == 4 and k == 4) {
+    //   // std::cout << i << ", " << j << ", " << k << std::endl;
+    //   // std::cout << nx1 << ", " << nx2 << ", " << nx3 << std::endl;
+    //   std::cout << " Ideal GRMHD:: after C2P (prims) " << std::endl;
+
+    //   std::cout << " dens = " << w.d << std::endl;
+    //   std::cout << " v_x  = " << w.vx << std::endl;
+    //   std::cout << " v_y  = " << w.vy << std::endl;
+    //   std::cout << " v_z  = " << w.vz << std::endl;
+    //   std::cout << " eint = " << w.e << std::endl;
+
+    //   // std::cout << " Bx = " << bcc(m, IBX, k, j, i) << std::endl;
+    //   // std::cout << " By = " << bcc(m, IBY, k, j, i) << std::endl;
+    //   // std::cout << " Bz = " << bcc(m, IBZ, k, j, i) << std::endl;
+
+    //   std::cout << "\n" << std::endl;
+    // }
 
     // set FOFC flag and quit loop if this function called only to check floors
     if (only_testfloors) {

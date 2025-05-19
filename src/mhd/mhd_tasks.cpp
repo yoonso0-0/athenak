@@ -529,6 +529,166 @@ TaskStatus MHD::ConToPrim(Driver *pdrive, int stage) {
   return TaskStatus::complete;
 }
 
+TaskStatus MHD::ConToPrimIdealNewtonianMhd(Driver *pdrive, int stage) {
+  auto &indcs = pmy_pack->pmesh->mb_indcs;
+  int &ng = indcs.ng;
+  int n1m1 = indcs.nx1 + 2 * ng - 1;
+  int n2m1 = (indcs.nx2 > 1) ? (indcs.nx2 + 2 * ng - 1) : 0;
+  int n3m1 = (indcs.nx3 > 1) ? (indcs.nx3 + 2 * ng - 1) : 0;
+
+  const bool only_testfloors = false;
+  const int il = 0;
+  const int iu = n1m1;
+  const int jl = 0;
+  const int ju = n2m1;
+  const int kl = 0;
+  const int ku = n3m1;
+
+  auto &cons = u0;
+  auto &b = b0;
+  auto &prim = w0;
+  auto &bcc = bcc0;
+
+  {
+    int &nmhd = pmy_pack->pmhd->nmhd;
+    int &nscal = pmy_pack->pmhd->nscalars;
+    int &nmb = pmy_pack->nmb_thispack;
+    auto &eos = peos->eos_data;
+    auto &fofc_ = pmy_pack->pmhd->fofc;
+
+    const int ni = (iu - il + 1);
+    const int nji = (ju - jl + 1) * ni;
+    const int nkji = (ku - kl + 1) * nji;
+    const int nmkji = nmb * nkji;
+
+    int nfloord_ = 0, nfloore_ = 0, nfloort_ = 0;
+    Kokkos::parallel_reduce(
+        "mhd_c2p", Kokkos::RangePolicy<>(DevExeSpace(), 0, nmkji),
+        KOKKOS_LAMBDA(const int &idx, int &sumd, int &sume, int &sumt) {
+          int m = (idx) / nkji;
+          int k = (idx - m * nkji) / nji;
+          int j = (idx - m * nkji - k * nji) / ni;
+          int i = (idx - m * nkji - k * nji - j * ni) + il;
+          j += jl;
+          k += kl;
+
+          // load single state conserved variables
+          MHDCons1D u;
+          u.d = cons(m, IDN, k, j, i);
+          u.mx = cons(m, IM1, k, j, i);
+          u.my = cons(m, IM2, k, j, i);
+          u.mz = cons(m, IM3, k, j, i);
+          u.e = cons(m, IEN, k, j, i);
+
+          // load cell-centered fields into conserved state
+          // use input CC fields if only testing floors with FOFC
+          if (only_testfloors) {
+            u.bx = bcc(m, IBX, k, j, i);
+            u.by = bcc(m, IBY, k, j, i);
+            u.bz = bcc(m, IBZ, k, j, i);
+            // else use simple linear average of face-centered fields
+          } else {
+            u.bx = 0.5 * (b.x1f(m, k, j, i) + b.x1f(m, k, j, i + 1));
+            u.by = 0.5 * (b.x2f(m, k, j, i) + b.x2f(m, k, j + 1, i));
+            u.bz = 0.5 * (b.x3f(m, k, j, i) + b.x3f(m, k + 1, j, i));
+          }
+
+          // if (m == 190 and i == 4 and j == 4 and k == 4) {
+          //   std::cout << " IdealMhd:: before C2P (cons) " << std::endl;
+
+          //   std::cout << " D   = " << u.d << std::endl;
+          //   std::cout << " Mx  = " << u.mx << std::endl;
+          //   std::cout << " My  = " << u.my << std::endl;
+          //   std::cout << " Mz  = " << u.mz << std::endl;
+          //   std::cout << " E   = " << u.e << std::endl;
+
+          //   std::cout << " Bx = " << u.bx << std::endl;
+          //   std::cout << " By = " << u.by << std::endl;
+          //   std::cout << " Bz = " << u.bz << std::endl;
+
+          //   std::cout << "\n" << std::endl;
+          // }
+
+          // call c2p function
+          // (inline function in ideal_c2p_mhd.hpp file)
+          HydPrim1D w;
+          bool dfloor_used = false, efloor_used = false, tfloor_used = false;
+          SingleC2P_IdealMHD(u, eos, w, dfloor_used, efloor_used, tfloor_used);
+
+          // set FOFC flag and quit loop if this function called only to check
+          // floors
+          if (only_testfloors) {
+            if (dfloor_used || efloor_used || tfloor_used) {
+              fofc_(m, k, j, i) = true;
+              sumd++; // use dfloor as counter for when either is true
+            }
+          } else {
+            // update counter, reset conserved if floor was hit
+            if (dfloor_used) {
+              cons(m, IDN, k, j, i) = u.d;
+              sumd++;
+            }
+            if (efloor_used) {
+              cons(m, IEN, k, j, i) = u.e;
+              sume++;
+            }
+            if (tfloor_used) {
+              cons(m, IEN, k, j, i) = u.e;
+              sumt++;
+            }
+            // store primitive state in 3D array
+            prim(m, IDN, k, j, i) = w.d;
+            prim(m, IVX, k, j, i) = w.vx;
+            prim(m, IVY, k, j, i) = w.vy;
+            prim(m, IVZ, k, j, i) = w.vz;
+            prim(m, IEN, k, j, i) = w.e;
+            // store cell-centered fields in 3D array
+            bcc(m, IBX, k, j, i) = u.bx;
+            bcc(m, IBY, k, j, i) = u.by;
+            bcc(m, IBZ, k, j, i) = u.bz;
+            // convert scalars (if any), always stored at end of cons and prim
+            // arrays.
+            for (int n = nmhd; n < (nmhd + nscal); ++n) {
+              // apply scalar floor
+              if (cons(m, n, k, j, i) < 0.0) {
+                cons(m, n, k, j, i) = 0.0;
+              }
+              prim(m, n, k, j, i) = cons(m, n, k, j, i) / u.d;
+            }
+
+            // if (m == 190 and i == 4 and j == 4 and k == 4) {
+            //   std::cout << " IdealMhd:: after C2P (prims) " << std::endl;
+
+            //   std::cout << " dens = " << prim(m, IDN, k, j, i) << std::endl;
+            //   std::cout << " v_x  = " << prim(m, IVX, k, j, i) << std::endl;
+            //   std::cout << " v_y  = " << prim(m, IVY, k, j, i) << std::endl;
+            //   std::cout << " v_z  = " << prim(m, IVZ, k, j, i) << std::endl;
+            //   std::cout << " eint = " << prim(m, IEN, k, j, i) << std::endl;
+
+            //   std::cout << " Bx = " << bcc(m, IBX, k, j, i) << std::endl;
+            //   std::cout << " By = " << bcc(m, IBY, k, j, i) << std::endl;
+            //   std::cout << " Bz = " << bcc(m, IBZ, k, j, i) << std::endl;
+
+            //   std::cout << "\n" << std::endl;
+            // }
+          }
+        },
+        Kokkos::Sum<int>(nfloord_), Kokkos::Sum<int>(nfloore_),
+        Kokkos::Sum<int>(nfloort_));
+
+    // store appropriate counters
+    if (only_testfloors) {
+      pmy_pack->pmesh->ecounter.nfofc += nfloord_;
+    } else {
+      pmy_pack->pmesh->ecounter.neos_dfloor += nfloord_;
+      pmy_pack->pmesh->ecounter.neos_efloor += nfloore_;
+      pmy_pack->pmesh->ecounter.neos_tfloor += nfloort_;
+    }
+  }
+
+  return TaskStatus::complete;
+}
+
 // ===========================================================================
 //  YK: this task manipulates primitive variables.
 // 
@@ -546,7 +706,8 @@ TaskStatus MHD::RescaleAndAddRecoil(ParameterInput *pin) {
 
   // YK: fix this later. Need to talk with Elias on correct scaling
   // const Real rho0_over_rho_infty = 0.1;  // YK: rescale to have max 1.0 at the beginning..
-  const Real rho0_over_rho_infty = 1.0; // YK: do nothing?
+  // const Real rho0_over_rho_infty = 1.0; // YK: do nothing?
+  const Real rho0_over_rho_infty = pin->GetReal("cbd_to_bhl_mapping", "rho0_over_rho_infty");
 
   // Parse kick velocity from input file
   const Real vk_x = pin->GetReal("cbd_to_bhl_mapping", "v_kick_x");
@@ -599,22 +760,21 @@ TaskStatus MHD::RescaleAndAddRecoil(ParameterInput *pin) {
         Real glower[4][4], gupper[4][4];
         ComputeMetricAndInverse(x1v, x2v, x3v, flat, spin, glower, gupper);
 
-        // if (m == 100 and i == 4 and j == 4 and k == 4) {
-        // std::cout << i << ", " << j << ", " << k << std::endl;
-        // std::cout << nx1 << ", " << nx2 << ", " <<nx3 << std::endl;
-        // std::cout << " dens = " << w0_(m, IDN, k, j, i) << std::endl;
-        // std::cout << " v_x  = " << w0_(m, IVX, k, j, i) << std::endl;
-        // std::cout << " v_y  = " << w0_(m, IVY, k, j, i) << std::endl;
-        // std::cout << " v_z  = " << w0_(m, IVZ, k, j, i) << std::endl;
-        // std::cout << " eint = " << w0_(m, IEN, k, j, i) << std::endl;
+        // if (m == 190 and i == 4 and j == 4 and k == 4) {
+        //   std::cout << i << ", " << j << ", " << k << std::endl;
+        //   std::cout << nx1 << ", " << nx2 << ", " << nx3 << std::endl;
+        //   std::cout << " dens = " << w0_(m, IDN, k, j, i) << std::endl;
+        //   std::cout << " v_x  = " << w0_(m, IVX, k, j, i) << std::endl;
+        //   std::cout << " v_y  = " << w0_(m, IVY, k, j, i) << std::endl;
+        //   std::cout << " v_z  = " << w0_(m, IVZ, k, j, i) << std::endl;
+        //   std::cout << " eint = " << w0_(m, IEN, k, j, i) << std::endl;
 
-        // std::cout << " Bx = " << bcc_(m,IBX,k,j,i) << std::endl;
-        // std::cout << " By = " << bcc_(m,IBY,k,j,i) << std::endl;
-        // std::cout << " Bz = " << bcc_(m,IBZ,k,j,i) << std::endl;
+        //   std::cout << " Bx = " << bcc_(m, IBX, k, j, i) << std::endl;
+        //   std::cout << " By = " << bcc_(m, IBY, k, j, i) << std::endl;
+        //   std::cout << " Bz = " << bcc_(m, IBZ, k, j, i) << std::endl;
 
-        // std::cout << "\n" << std::endl;
+        //   std::cout << "\n" << std::endl;
         // }
-
 
         // Rescale hydro primitives
         w0_(m, IDN, k, j, i) *= rho0_over_rho_infty;
@@ -648,18 +808,18 @@ TaskStatus MHD::RescaleAndAddRecoil(ParameterInput *pin) {
         w0_(m, IVY, k, j, i) -= vk_y;
         w0_(m, IVZ, k, j, i) -= vk_z;
 
-        // if (m == 100 and i == 4 and j == 4 and k == 4) {
-        // std::cout << i << ", " << j << ", " << k << std::endl;
-        // std::cout << nx1 << ", " << nx2 << ", " <<nx3 << std::endl;
-        // std::cout << " dens = " << w0_(m, IDN, k, j, i) << std::endl;
-        // std::cout << " v_x  = " << w0_(m, IVX, k, j, i) << std::endl;
-        // std::cout << " v_y  = " << w0_(m, IVY, k, j, i) << std::endl;
-        // std::cout << " v_z  = " << w0_(m, IVZ, k, j, i) << std::endl;
-        // std::cout << " eint = " << w0_(m, IEN, k, j, i) << std::endl;
+        // if (m == 190 and i == 4 and j == 4 and k == 4) {
+        //   std::cout << i << ", " << j << ", " << k << std::endl;
+        //   std::cout << nx1 << ", " << nx2 << ", " << nx3 << std::endl;
+        //   std::cout << " dens = " << w0_(m, IDN, k, j, i) << std::endl;
+        //   std::cout << " v_x  = " << w0_(m, IVX, k, j, i) << std::endl;
+        //   std::cout << " v_y  = " << w0_(m, IVY, k, j, i) << std::endl;
+        //   std::cout << " v_z  = " << w0_(m, IVZ, k, j, i) << std::endl;
+        //   std::cout << " eint = " << w0_(m, IEN, k, j, i) << std::endl;
 
-        // std::cout << " Bx = " << bcc_(m, IBX, k, j, i) << std::endl;
-        // std::cout << " By = " << bcc_(m, IBY, k, j, i) << std::endl;
-        // std::cout << " Bz = " << bcc_(m, IBZ, k, j, i) << std::endl;
+        //   std::cout << " Bx = " << bcc_(m, IBX, k, j, i) << std::endl;
+        //   std::cout << " By = " << bcc_(m, IBY, k, j, i) << std::endl;
+        //   std::cout << " Bz = " << bcc_(m, IBZ, k, j, i) << std::endl;
         // }
 
         // Update conservatives from the modified primitives
@@ -681,7 +841,7 @@ TaskStatus MHD::RescaleAndAddRecoil(ParameterInput *pin) {
         u0_(m, IM3, k, j, i) = u.mz;
         u0_(m, IEN, k, j, i) = u.e;
 
-        // if (m == 100 and i == 4 and j == 4 and k == 4) {
+        // if (m == 190 and i == 4 and j == 4 and k == 4) {
         //   std::cout << " D   = " << u.d << std::endl;
         //   std::cout << " Mx  = " << u.mx << std::endl;
         //   std::cout << " My  = " << u.my << std::endl;
