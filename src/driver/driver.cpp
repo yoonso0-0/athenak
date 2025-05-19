@@ -311,14 +311,14 @@ void Driver::ExecuteTaskList(Mesh *pm, std::string tl, int stage) {
 
 void Driver::Initialize(Mesh *pmesh, ParameterInput *pin, Outputs *pout, bool res_flag) {
   //---- Step 1.  Set conserved variables in ghost zones for all physics
-  InitBoundaryValuesAndPrimitives(pmesh);
+  InitBoundaryValuesAndPrimitives(pmesh, true);
 
   // YK: manipulating primitive variables here
   mhd::MHD *pmhd = pmesh->pmb_pack->pmhd;
   // Add kick velocity to primitive var, and update conservatives
   (void)pmhd->RescaleAndAddRecoil(pin);
   // Send out U again for ghost zones
-  InitBoundaryValuesAndPrimitives(pmesh);
+  InitBoundaryValuesAndPrimitives(pmesh, false);
 
   //
   // Reset time, cycle, dt, ... to zero
@@ -605,7 +605,7 @@ Real Driver::UpdateWallClock() {
 //! \brief Sets boundary conditions on conserved and initializes primitives.  Used both
 //! on initialization, and when new MBs created with AMR.
 
-void Driver::InitBoundaryValuesAndPrimitives(Mesh *pm) {
+void Driver::InitBoundaryValuesAndPrimitives(Mesh *pm, bool use_newtonian_c2p) {
   // Note: with MPI, sends on ALL MBs must be complete before receives execute
 
   // Initialize Z4c
@@ -665,10 +665,23 @@ void Driver::InitBoundaryValuesAndPrimitives(Mesh *pm) {
     (void) pmhd->ApplyPhysicalBCs(this, 0);
     (void) pmhd->Prolongate(this, 0);
     if (pdyngr == nullptr) {
-      if (global_variable::my_rank == 0) {
-        std::cout << "  ** Running initial Con2Prim " << std::endl;
+
+      // Branch initial C2P
+      if (use_newtonian_c2p) {
+        if (global_variable::my_rank == 0) {
+          std::cout << "  ** Running initial Con2Prim : Newtonian ideal MHD "
+                    << std::endl;
+        }
+        (void)pmhd->ConToPrimIdealNewtonianMhd(this, 0);
+
+      } else {
+        if (global_variable::my_rank == 0) {
+          std::cout << "  ** Running initial Con2Prim : Ideal GRMHD "
+                    << std::endl;
+        }
+        (void)pmhd->ConToPrim(this, 0);
       }
-      (void) pmhd->ConToPrim(this, 0);
+
     } else {
       if (pz4c != nullptr) {
         (void) pz4c->ConvertZ4cToADM(this, 0);

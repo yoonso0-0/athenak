@@ -189,6 +189,7 @@ class MHD {
 
   // YK: For CBD -> BHL conversion
   TaskStatus RescaleAndAddRecoil(ParameterInput *pin);
+  TaskStatus ConToPrimIdealNewtonianMhd(Driver *d, int stage);
 
   // CalculateFluxes function templated over Riemann Solvers
   template <MHD_RSolver T>
