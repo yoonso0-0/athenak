@@ -705,9 +705,15 @@ TaskStatus MHD::RescaleAndAddRecoil(ParameterInput *pin) {
   const Real a_over_rg = pin->GetReal("cbd_to_bhl_mapping", "a_over_rg");
 
   // YK: fix this later. Need to talk with Elias on correct scaling
-  // const Real rho0_over_rho_infty = 0.1;  // YK: rescale to have max 1.0 at the beginning..
-  // const Real rho0_over_rho_infty = 1.0; // YK: do nothing?
-  const Real rho0_over_rho_infty = pin->GetReal("cbd_to_bhl_mapping", "rho0_over_rho_infty");
+  const Real rho0_over_rho_infty =
+      pin->GetReal("cbd_to_bhl_mapping", "rho0_over_rho_infty");
+  const Real gm_over_a_c_squared =
+      pin->GetReal("cbd_to_bhl_mapping", "gm_over_a_c_squared");
+
+  if (global_variable::my_rank == 0) {
+    std::cout << "       rho0/rho_infty = " << rho0_over_rho_infty << std::endl;
+    std::cout << "       GM/ac^2        = " << gm_over_a_c_squared << std::endl;
+  }
 
   // Parse kick velocity from input file
   const Real vk_x = pin->GetReal("cbd_to_bhl_mapping", "v_kick_x");
@@ -784,29 +790,38 @@ TaskStatus MHD::RescaleAndAddRecoil(ParameterInput *pin) {
 
         // Rescale hydro primitives
         w0_(m, IDN, k, j, i) *= rho0_over_rho_infty;
-        w0_(m, IVX, k, j, i) /= std::sqrt(a_over_rg);
-        w0_(m, IVY, k, j, i) /= std::sqrt(a_over_rg);
-        w0_(m, IVZ, k, j, i) /= std::sqrt(a_over_rg);
-        w0_(m, IEN, k, j, i) *= rho0_over_rho_infty / a_over_rg;
+        w0_(m, IVX, k, j, i) *= std::sqrt(gm_over_a_c_squared);
+        w0_(m, IVY, k, j, i) *= std::sqrt(gm_over_a_c_squared);
+        w0_(m, IVZ, k, j, i) *= std::sqrt(gm_over_a_c_squared);
+        w0_(m, IEN, k, j, i) *= (rho0_over_rho_infty * gm_over_a_c_squared);
 
         // Cell-centered magnetic fields
-        bcc_(m, IBX, k, j, i) *= std::sqrt(rho0_over_rho_infty / a_over_rg);
-        bcc_(m, IBY, k, j, i) *= std::sqrt(rho0_over_rho_infty / a_over_rg);
-        bcc_(m, IBZ, k, j, i) *= std::sqrt(rho0_over_rho_infty / a_over_rg);
+        bcc_(m, IBX, k, j, i) *=
+            std::sqrt(rho0_over_rho_infty * gm_over_a_c_squared);
+        bcc_(m, IBY, k, j, i) *=
+            std::sqrt(rho0_over_rho_infty * gm_over_a_c_squared);
+        bcc_(m, IBZ, k, j, i) *=
+            std::sqrt(rho0_over_rho_infty * gm_over_a_c_squared);
 
         // Face-centered magnetic fields
-        b0.x1f(m, k, j, i) *= std::sqrt(rho0_over_rho_infty / a_over_rg);
-        b0.x2f(m, k, j, i) *= std::sqrt(rho0_over_rho_infty / a_over_rg);
-        b0.x3f(m, k, j, i) *= std::sqrt(rho0_over_rho_infty / a_over_rg);
+        b0.x1f(m, k, j, i) *=
+            std::sqrt(rho0_over_rho_infty * gm_over_a_c_squared);
+        b0.x2f(m, k, j, i) *=
+            std::sqrt(rho0_over_rho_infty * gm_over_a_c_squared);
+        b0.x3f(m, k, j, i) *=
+            std::sqrt(rho0_over_rho_infty * gm_over_a_c_squared);
         // Include extra face-component at edges of the meshblock
         if (i == ie) {
-          b0.x1f(m, k, j, i + 1) *= std::sqrt(rho0_over_rho_infty / a_over_rg);
+          b0.x1f(m, k, j, i + 1) *=
+              std::sqrt(rho0_over_rho_infty * gm_over_a_c_squared);
         }
         if (j == je) {
-          b0.x2f(m, k, j + 1, i) *= std::sqrt(rho0_over_rho_infty / a_over_rg);
+          b0.x2f(m, k, j + 1, i) *=
+              std::sqrt(rho0_over_rho_infty * gm_over_a_c_squared);
         }
         if (k == ke) {
-          b0.x3f(m, k + 1, j, i) *= std::sqrt(rho0_over_rho_infty / a_over_rg);
+          b0.x3f(m, k + 1, j, i) *=
+              std::sqrt(rho0_over_rho_infty * gm_over_a_c_squared);
         }
 
         // if (m == 191 and i==40 and j == 4 and k == 4) {
