@@ -194,10 +194,20 @@ void SingleC2P_IdealSRHyd(HydCons1D &u, const EOS_Data &eos, const Real s2, HydP
   Real const lor = sqrt(1.0 + z*z);  // (C15)
 
   // compute density then apply floor
+  //
+  // YK: If mass density is below the floor, also floor internal energy and set
+  // velocity to zero (this seems to work well with MHD, so why not hydro..?)
   Real dens = u.d/lor;
   if (dens < eos.dfloor) {
     dens = eos.dfloor;
     dfloor_used = true;
+    
+    w.d = dens;
+    w.e = eos.pfloor / gm1; // Ideal gas
+    w.vx = 0.0;
+    w.vy = 0.0;
+    w.vz = 0.0;
+    return;
   }
 
   // compute specific internal energy density then apply floor
