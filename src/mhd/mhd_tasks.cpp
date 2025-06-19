@@ -756,9 +756,15 @@ TaskStatus MHD::RescaleAndAddRecoil(ParameterInput *pin) {
         int nx3 = indcs.nx3;
         Real x3v = CellCenterX(k - ks, nx3, x3min, x3max);
 
-        // Compute metric coefficients of KS -- need later for P2C
+        // Compute metric coefficients of KS
         Real glower[4][4], gupper[4][4];
         ComputeMetricAndInverse(x1v, x2v, x3v, flat, spin, glower, gupper);
+
+        // Lapse and shift
+        const Real alpha = sqrt(-1.0 / gupper[0][0]);
+        const Real beta1 = -gupper[0][1] / gupper[0][0];
+        const Real beta2 = -gupper[0][2] / gupper[0][0];
+        const Real beta3 = -gupper[0][3] / gupper[0][0];
 
         // if (m == 190 and i == 4 and j == 4 and k == 4) {
         //   std::cout << i << ", " << j << ", " << k << std::endl;
@@ -803,10 +809,120 @@ TaskStatus MHD::RescaleAndAddRecoil(ParameterInput *pin) {
           b0.x3f(m, k + 1, j, i) *= std::sqrt(rho0_over_rho_infty / a_over_rg);
         }
 
+        // if (m == 191 and i==40 and j == 4 and k == 4) {
+        //   std::cout << "  -- After rescaling " << std::endl;
+        //   std::cout << i << ", " << j << ", " << k << std::endl;
+        //   std::cout << " v_x  = " << w0_(m, IVX, k, j, i) << std::endl;
+        //   std::cout << " v_y  = " << w0_(m, IVY, k, j, i) << std::endl;
+        //   std::cout << " v_z  = " << w0_(m, IVZ, k, j, i) << std::endl;
+        //   std::cout << "\n" << std::endl;
+        // }
+
+        // (@YK: Jun 19) We take the rescaled Newtonian velocity as the
+        // coordinate 4-velocity u^i, not the primitive variable u^i'.
+        const Real u1 = w0_(m, IVX, k, j, i);
+        const Real u2 = w0_(m, IVY, k, j, i);
+        const Real u3 = w0_(m, IVZ, k, j, i);
+
+        // Compute u^0 from normalization
+        const Real a = glower[0][0];
+        const Real b =
+            2.0 * (glower[0][1] * u1 + glower[0][2] * u2 + glower[0][3] * u3);
+        const Real c =
+            1.0 + (glower[1][1] * u1 * u1 + 2.0 * glower[1][2] * u1 * u2 +
+                   2.0 * glower[1][3] * u1 * u3 + glower[2][2] * u2 * u2 +
+                   2.0 * glower[2][3] * u2 * u3 + glower[3][3] * u3 * u3);
+
+        // u^i/u^0
+        Real u1_u0, u2_u0, u3_u0;
+
+        const Real determinant = b * b - 4.0 * a * c;
+        if (determinant < 0.0) {
+          u1_u0 = 0.0;
+          u2_u0 = 0.0;
+          u3_u0 = 0.0;
+        } else {
+          const Real u0 = -2.0 * c / (b - sqrt(b * b - 4.0 * a * c));
+          u1_u0 = u1 / u0;
+          u2_u0 = u2 / u0;
+          u3_u0 = u3 / u0;
+        }
+
+        // Then we add kick to the transport velocity u^i/u^0:
+        u1_u0 -= vk_x;
+        u2_u0 -= vk_y;
+        u3_u0 -= vk_z;
+
+        // Convert back into primitives
+        const Real v1 = (u1_u0 + beta1) / alpha;
+        const Real v2 = (u2_u0 + beta2) / alpha;
+        const Real v3 = (u3_u0 + beta3) / alpha;
+
+        const Real q = glower[1][1] * v1 * v1 + 2.0 * glower[1][2] * v1 * v2 +
+                       2.0 * glower[1][3] * v1 * v3 + glower[2][2] * v2 * v2 +
+                       2.0 * glower[2][3] * v2 * v3 + glower[3][3] * v3 * v3;
+
+        Real lorentz_W = 1.0 / (1.0 - q);
+        if (determinant < 0.0) {
+          lorentz_W = 1.0;
+        }
+
+        const Real u1_prim = lorentz_W * v1;
+        const Real u2_prim = lorentz_W * v2;
+        const Real u3_prim = lorentz_W * v3;
+
+        // if ((abs(x1v) < 2) && (abs(x2v) < 2) && (abs(x3v) < 2)) {
+        // if (isnan(lorentz_W)) {
+
+        //   const Real root1 = -2.0 * c / (b - sqrt(b * b - 4.0 * a * c));
+        //   const Real root2 = -2.0 * c / (b + sqrt(b * b - 4.0 * a * c));
+
+        //   std::cout << "(x, y, z) = (" << x1v << ", " << x2v << ", " << x3v
+        //             << ")" << std::endl;
+
+        //   std::cout << "root_1 = " << root1 << ", root_2 = " << root2
+        //             << std::endl;
+
+        //   std::cout << " u^0 = " << u0 << std::endl;
+        //   std::cout << " v_x  = " << u1_prim << std::endl;
+        //   std::cout << " v_y  = " << u2_prim << std::endl;
+        //   std::cout << " v_z  = " << u3_prim << std::endl;
+        // }
+
+        // if (m == 191 and i==40 and j == 4 and k == 4) {
+        //   std::cout << " u^0 = " << u0 << std::endl;
+        //   std::cout << "  W  = " << lorentz_W << std::endl;
+        // }
+
         // Add kick
-        w0_(m, IVX, k, j, i) -= vk_x;
-        w0_(m, IVY, k, j, i) -= vk_y;
-        w0_(m, IVZ, k, j, i) -= vk_z;
+        // w0_(m, IVX, k, j, i) -= vk_x;
+        // w0_(m, IVY, k, j, i) -= vk_y;
+        // w0_(m, IVZ, k, j, i) -= vk_z;
+
+        // if (m == 191 and i==40 and j == 4 and k == 4) {
+        //   std::cout << i << ", " << j << ", " << k << std::endl;
+        //   std::cout << nx1 << ", " << nx2 << ", " << nx3 << std::endl;
+
+        //   std::cout << "(x, y, z) = (" << x1v << ", " << x2v << ", " << x3v
+        //             << ")" << std::endl;
+
+        //   std::cout << " shift vector = (" << beta1 << ", " << beta2 << ", "
+        //             << beta3 << ")" << std::endl;
+
+        //   std::cout << "  - Without shift fix " << std::endl;
+        //   std::cout << " v_x  = " << w0_(m, IVX, k, j, i) << std::endl;
+        //   std::cout << " v_y  = " << w0_(m, IVY, k, j, i) << std::endl;
+        //   std::cout << " v_z  = " << w0_(m, IVZ, k, j, i) << std::endl;
+
+        //   std::cout << "  - After shift fix " << std::endl;
+        //   std::cout << " v_x  = " << u1_prim << std::endl;
+        //   std::cout << " v_y  = " << u2_prim << std::endl;
+        //   std::cout << " v_z  = " << u3_prim << std::endl;
+        // }
+
+        w0_(m, IVX, k, j, i) = u1_prim;
+        w0_(m, IVY, k, j, i) = u2_prim;
+        w0_(m, IVZ, k, j, i) = u3_prim;
 
         // if (m == 190 and i == 4 and j == 4 and k == 4) {
         //   std::cout << i << ", " << j << ", " << k << std::endl;
