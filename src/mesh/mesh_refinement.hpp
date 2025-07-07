@@ -42,7 +42,6 @@ class MeshRefinement {
  public:
   MeshRefinement(Mesh *pm, ParameterInput *pin);
   ~MeshRefinement();
-
   // data
   int nmb_created;           // # of MeshBlocks created via AMR across all ranks
   int nmb_deleted;           // # of MeshBlocks deleted via AMR across all ranks
@@ -131,7 +130,9 @@ class MeshRefinement {
  private:
   // data
   Mesh *pmy_mesh;
-  Real d_threshold_, dd_threshold_, dp_threshold_, dv_threshold_, chi_threshold_;
+  Real d_threshold_, dd_threshold_, dp_threshold_, dv_threshold_, chi_threshold_, min_curve_threshold_,
+       max_curve_threshold_, alpha_refine_, alpha_coarsen_, refine_threshold_, coarsen_threshold_;
   bool check_cons_;
+  int stencil_, variable_;
 };
 #endif // MESH_MESH_REFINEMENT_HPP_
