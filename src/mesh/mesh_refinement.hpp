@@ -45,7 +45,9 @@ class MeshRefinement {
  public:
   MeshRefinement(Mesh *pm, ParameterInput *pin);
   ~MeshRefinement();
-  Real GetCurveThreshold() const { return curve_threshold; }
+  Real GetMaxCurveThreshold() const { return max_curve_threshold_; }
+  Real GetMinCurveThreshold() const { return min_curve_threshold_; }
+  Real GetStencilOrder() const { return stencil_; }
   // data
   int nmb_created;           // # of MeshBlocks created via AMR across all ranks
   int nmb_deleted;           // # of MeshBlocks deleted via AMR across all ranks
