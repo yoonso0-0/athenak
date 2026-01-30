@@ -6,7 +6,6 @@
 //! \file mesh_refinement.cpp
 //! \brief Implements constructor and functions in MeshRefinement class.
 //! Note while restriction functions for CC and FC data are implemented in this file,
-
 //! prolongation operators are implemented as INLINE functions in prolongation.hpp (and
 //! are used both here for AMR and in the BVals class at fine/coarse boundaries).
 
@@ -108,6 +107,7 @@ MeshRefinement::~MeshRefinement() {
 //----------------------------------------------------------------------------------------
 //! \fn void MeshRefinement::AdaptiveMeshRefinement()
 //! \brief Simple driver function for adaptive mesh refinement
+
 void MeshRefinement::AdaptiveMeshRefinement(Driver *pdriver, ParameterInput *pin) {
   // first check refinement criteria
   CheckForRefinement(pmy_mesh->pmb_pack);
@@ -141,6 +141,7 @@ void MeshRefinement::AdaptiveMeshRefinement(Driver *pdriver, ParameterInput *pin
   }
   return;
 }
+
 //----------------------------------------------------------------------------------------
 //! \fn void RefinementCriteria::CheckForRefinement()
 //! \brief Checks for refinement/de-refinement and sets refine_flag(m) for all
@@ -150,14 +151,14 @@ void MeshRefinement::AdaptiveMeshRefinement(Driver *pdriver, ParameterInput *pin
 void MeshRefinement::CheckForRefinement(MeshBlockPack* pmbp) {
   // reallocate and zero refine_flag in host space and sync with device
   Kokkos::realloc(refine_flag, pmy_mesh->nmb_total);
-  for (int m = 0; m < (pmy_mesh->nmb_total); ++m) {
+  for (int m=0; m<(pmy_mesh->nmb_total); ++m) {
     refine_flag.h_view(m) = 0;
   }
   refine_flag.template modify<HostMemSpace>();
   refine_flag.template sync<DevExeSpace>();
 
   // increment cycle counter for each MB
-  for (int m = 0; m < (pmy_mesh->nmb_total); ++m) {
+  for (int m=0; m<(pmy_mesh->nmb_total); ++m) {
     ncyc_since_ref(m) += 1;
   }
   if ((pmy_mesh->ncycle)%(ncyc_check_amr) != 0) {return;}  // not cycle to check
@@ -169,6 +170,7 @@ void MeshRefinement::CheckForRefinement(MeshBlockPack* pmbp) {
 
   // check (on device) Hydro/MHD refinement conditions for cons vars over all MeshBlocks
   auto refine_flag_ = refine_flag;
+  
   // iterate through list of refinement criteria and apply methods
   for (auto it = pmrc->rcrit.begin(); it != pmrc->rcrit.end(); ++it) {
     switch (it->rmethod) {

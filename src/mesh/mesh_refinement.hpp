@@ -45,6 +45,7 @@ class MeshRefinement {
  public:
   MeshRefinement(Mesh *pm, ParameterInput *pin);
   ~MeshRefinement();
+
   // data
   int nmb_created;           // # of MeshBlocks created via AMR across all ranks
   int nmb_deleted;           // # of MeshBlocks deleted via AMR across all ranks
