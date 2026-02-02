@@ -137,13 +137,13 @@ RefinementCriteria::RefinementCriteria(Mesh *pm, ParameterInput *pin) :
 
   // Set rdata array to shallow slice of target data
   SetRefinementData(pm->pmb_pack, false, false);
+  }
 }
 
 //----------------------------------------------------------------------------------------
 // destructor
 
-RefinementCriteria::~RefinementCriteria() {
-}
+RefinementCriteria::~RefinementCriteria() {}
 
 //----------------------------------------------------------------------------------------
 //! \fn void RefinementCriteria::SetRefinementData()
