@@ -1,0 +1,79 @@
+
+<job>
+basename  = recoiled_disk        # problem ID: basename of output filenames
+
+<mesh>
+nghost    = 2           # Number of ghost cells
+
+nx1       = 128
+x1min     = -3.0
+x1max     = 3.0
+ix1_bc    = outflow
+ox1_bc    = outflow
+
+nx2       = 128
+x2min     = -3.0
+x2max     = 3.0
+ix2_bc    = outflow
+ox2_bc    = outflow
+
+nx3       = 64
+x3min     = -1.5
+x3max     = 1.5
+ix3_bc    = outflow
+ox3_bc    = outflow
+
+<meshblock>
+nx1       = 16
+nx2       = 16
+nx3       = 16
+
+#<mesh_refinement>
+#refinement = static
+
+#<refined_region1>
+#level = 1
+#x1min = -0.1
+#x1max = 0.1
+#x2min = -0.1
+#x2max = 0.1
+#x3min = -0.1
+#x3max = 0.1
+
+<time>
+evolution  = dynamic     # dynamic/kinematic/static
+integrator = rk3         # time integration algorithm
+cfl_number = 0.4         # The Courant, Friedrichs, & Lewy (CFL) Number
+nlim       = 1          # cycle limit
+tlim       = 2.0         # time limit
+ndiag      = 100         # cycles between diagostic output
+
+<hydro>
+eos             = ideal  # EOS type
+reconstruct     = plm    # spatial reconstruction method
+rsolver         = hlle   # Riemann-solver to be used
+gamma           = 1.4    # gamma = C_p/C_v
+dfloor      = 1.0e-8     # floor on density rho
+pfloor      = 0.333e-10  # floor on gas pressure p_gas
+
+<hydro_srcterms>
+point_particle_gravity_at_center = true
+
+<problem>
+r_cavity = 0.5
+r_out = 2.0
+truncation_length_out = 0.2
+power_exponent_p = 0.0
+delta0 = 1.0e-5
+
+scale_height = 0.1
+
+<output1>
+file_type  = hst         # History data dump
+dt         = 0.01        # time increment between outputs
+
+<output2>
+file_type  = bin        # Binary data dump
+variable   = hydro_w    # variables to be output
+#dt         = 0.05      # time increment between outputs
+dcycle = 1
