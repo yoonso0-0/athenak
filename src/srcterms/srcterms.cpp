@@ -41,6 +41,9 @@ SourceTerms::SourceTerms(std::string block, MeshBlockPack *pp, ParameterInput *p
   rel_cooling = pin->GetOrAddBoolean(block, "rel_cooling", false);
   rad_beam = pin->GetOrAddBoolean(block, "rad_beam", false);
 
+  // @YK
+  point_particle_gravity_at_center = pin->GetOrAddBoolean(block, "point_particle_gravity_at_center", false);
+
   // (1) read data for (constant) gravitational acceleration
   if (const_accel) {
     const_accel_val = pin->GetReal(block, "const_accel_val");
@@ -94,11 +97,68 @@ void SourceTerms::ApplySrcTerms(const DvceArray5D<Real> &w0, const EOS_Data &eos
   if (const_accel) ConstantAccel(w0, eos_data,  bdt, u0);
   if (ism_cooling) ISMCooling(w0, eos_data, bdt, u0);
   if (rel_cooling) RelCooling(w0, eos_data, bdt, u0);
+
+  // @YK
+  if (point_particle_gravity_at_center)
+    PointParticleGravity(w0, eos_data, bdt, u0);
+
   return;
 }
 
 void SourceTerms::ApplySrcTerms(DvceArray5D<Real> &i0, const Real bdt) {
   if (rad_beam) BeamSource(i0, bdt);
+  return;
+}
+
+void SourceTerms::PointParticleGravity(const DvceArray5D<Real> &w0,
+                                       const EOS_Data &eos_data, const Real bdt,
+                                       DvceArray5D<Real> &u0) {
+  auto &indcs = pmy_pack->pmesh->mb_indcs;
+  int is = indcs.is, ie = indcs.ie;
+  int js = indcs.js, je = indcs.je;
+  int ks = indcs.ks, ke = indcs.ke;
+  int nmb1 = (pmy_pack->nmb_thispack - 1);
+
+  auto &size = pmy_pack->pmb->mb_size;
+
+  par_for(
+      "point_particle_gravity", DevExeSpace(), 0, nmb1, ks, ke, js, je, is, ie,
+      KOKKOS_LAMBDA(int m, int k, int j, int i) {
+        Real &x1min = size.d_view(m).x1min;
+        Real &x1max = size.d_view(m).x1max;
+        Real x1v = CellCenterX(i - is, indcs.nx1, x1min, x1max);
+
+        Real &x2min = size.d_view(m).x2min;
+        Real &x2max = size.d_view(m).x2max;
+        Real x2v = CellCenterX(j - js, indcs.nx2, x2min, x2max);
+
+        Real &x3min = size.d_view(m).x3min;
+        Real &x3max = size.d_view(m).x3max;
+        Real x3v = CellCenterX(k - ks, indcs.nx3, x3min, x3max);
+
+        //
+        //
+        //
+
+        // note: using GM=1 normalization
+
+        const Real r = std::sqrt(x1v * x1v + x2v * x2v + x3v * x3v);
+        const Real r0 = 1e-5; // smoothing radius
+        const Real g = 1.0 / ((r + r0) * (r + r0));
+
+        u0(m, IEN, k, j, i) +=
+            -bdt *
+            (u0(m, IM1, k, j, i) * x1v + u0(m, IM2, k, j, i) * x2v +
+             u0(m, IM3, k, j, i) * x3v) *
+            g / r;
+
+        u0(m, IM1, k, j, i) += -bdt * w0(m, IDN, k, j, i) * g * x1v / r;
+        u0(m, IM2, k, j, i) += -bdt * w0(m, IDN, k, j, i) * g * x2v / r;
+        u0(m, IM3, k, j, i) += -bdt * w0(m, IDN, k, j, i) * g * x3v / r;
+
+
+      });
+
   return;
 }
 
