@@ -36,6 +36,9 @@ class SourceTerms {
   bool rad_beam;
   bool self_gravity;
 
+  // @YK
+  bool point_particle_gravity_at_center;
+
   // new timestep
   Real dtnew;
 
@@ -71,7 +74,10 @@ class SourceTerms {
   void BeamSource(DvceArray5D<Real> &i0, const Real bdt);
   void NewTimeStep(const DvceArray5D<Real> &w0, const EOS_Data &eos);
 
- private:
+  void PointParticleGravity(const DvceArray5D<Real> &w0, const EOS_Data &eos,
+                            const Real bdt, DvceArray5D<Real> &u0);
+
+private:
   MeshBlockPack *pmy_pack;
 };
 
