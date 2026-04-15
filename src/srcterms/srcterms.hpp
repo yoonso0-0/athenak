@@ -58,6 +58,9 @@ class SourceTerms {
   Real dir1, dir2, dir3;  // direction of source
   Real width, spread;     // spatial width of source region, spread in angles
 
+  // @YK: data for point-particle gravity
+  Real softening_length;
+
   // functions
   void ApplySrcTerms(const DvceArray5D<Real> &w0, const EOS_Data &eos,
                      const Real bdt, DvceArray5D<Real> &u0);
