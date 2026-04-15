@@ -42,7 +42,9 @@ SourceTerms::SourceTerms(std::string block, MeshBlockPack *pp, ParameterInput *p
   rad_beam = pin->GetOrAddBoolean(block, "rad_beam", false);
 
   // @YK
-  point_particle_gravity_at_center = pin->GetOrAddBoolean(block, "point_particle_gravity_at_center", false);
+  point_particle_gravity_at_center =
+      pin->GetOrAddBoolean(block, "point_particle_gravity_at_center", false);
+  softening_length = pin->GetReal(block, "gravity_softening_length");
 
   // (1) read data for (constant) gravitational acceleration
   if (const_accel) {
@@ -110,6 +112,10 @@ void SourceTerms::ApplySrcTerms(DvceArray5D<Real> &i0, const Real bdt) {
   return;
 }
 
+//
+// @YK: point-particle gravity
+//
+//
 void SourceTerms::PointParticleGravity(const DvceArray5D<Real> &w0,
                                        const EOS_Data &eos_data, const Real bdt,
                                        DvceArray5D<Real> &u0) {
@@ -121,45 +127,68 @@ void SourceTerms::PointParticleGravity(const DvceArray5D<Real> &w0,
 
   auto &size = pmy_pack->pmb->mb_size;
 
+  const Real h = softening_length;
+  const Real h_over_2 = 0.5 * softening_length;
+  const Real one_over_h = 1.0 / softening_length;
+
   par_for(
       "point_particle_gravity", DevExeSpace(), 0, nmb1, ks, ke, js, je, is, ie,
       KOKKOS_LAMBDA(int m, int k, int j, int i) {
         Real &x1min = size.d_view(m).x1min;
         Real &x1max = size.d_view(m).x1max;
-        Real x1v = CellCenterX(i - is, indcs.nx1, x1min, x1max);
+        const Real x1v = CellCenterX(i - is, indcs.nx1, x1min, x1max);
 
         Real &x2min = size.d_view(m).x2min;
         Real &x2max = size.d_view(m).x2max;
-        Real x2v = CellCenterX(j - js, indcs.nx2, x2min, x2max);
+        const Real x2v = CellCenterX(j - js, indcs.nx2, x2min, x2max);
 
         Real &x3min = size.d_view(m).x3min;
         Real &x3max = size.d_view(m).x3max;
-        Real x3v = CellCenterX(k - ks, indcs.nx3, x3min, x3max);
+        const Real x3v = CellCenterX(k - ks, indcs.nx3, x3min, x3max);
 
-        //
-        //
-        //
+        const Real radius = std::sqrt(x1v * x1v + x2v * x2v + x3v * x3v);
 
-        // note: using GM=1 normalization
+        Real softened_one_over_r;
 
-        const Real r = std::sqrt(x1v * x1v + x2v * x2v + x3v * x3v);
-        const Real r0 = 1e-5; // smoothing radius
-        const Real g = 1.0 / ((r + r0) * (r + r0));
+        if (radius >= h) {
+          softened_one_over_r = 1.0 / radius;
+        } else {
+          const Real u = radius * one_over_h;
+          const Real u2 = SQR(u);
 
+          // Horner's method for polynomial evaluation
+          if (radius < h_over_2) {
+            softened_one_over_r =
+                one_over_h *
+                (2.8 + u2 * (-5.333333333333333 + u2 * (9.6 - 6.4 * u)));
+          } else {
+            softened_one_over_r =
+                (-0.06666666666666667 +
+                 u * (3.2 + u2 * (-10.666666666666666 +
+                                  u * (16.0 +
+                                       u * (-9.6 + 2.1333333333333333 * u))))) /
+                radius;
+          }
+        }
+
+        const Real softened_inv_r3 =
+            softened_one_over_r * softened_one_over_r * softened_one_over_r;
+
+        // Pre-calculate source multipliers to eliminate redundant array
+        // reads/math
+        const Real dt_src = -bdt * softened_inv_r3;
+
+        // Update Conserved Variables
         u0(m, IEN, k, j, i) +=
-            -bdt *
-            (u0(m, IM1, k, j, i) * x1v + u0(m, IM2, k, j, i) * x2v +
-             u0(m, IM3, k, j, i) * x3v) *
-            g / r;
+            dt_src * (u0(m, IM1, k, j, i) * x1v + u0(m, IM2, k, j, i) * x2v +
+                      u0(m, IM3, k, j, i) * x3v);
 
-        u0(m, IM1, k, j, i) += -bdt * w0(m, IDN, k, j, i) * g * x1v / r;
-        u0(m, IM2, k, j, i) += -bdt * w0(m, IDN, k, j, i) * g * x2v / r;
-        u0(m, IM3, k, j, i) += -bdt * w0(m, IDN, k, j, i) * g * x3v / r;
+        const Real dt_rho_src = dt_src * w0(m, IDN, k, j, i);
 
-
+        u0(m, IM1, k, j, i) += dt_rho_src * x1v;
+        u0(m, IM2, k, j, i) += dt_rho_src * x2v;
+        u0(m, IM3, k, j, i) += dt_rho_src * x3v;
       });
-
-  return;
 }
 
 //----------------------------------------------------------------------------------------
