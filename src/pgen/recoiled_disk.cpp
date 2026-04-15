@@ -73,7 +73,7 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
   }
 
   // @YK : setting up boundary condition
-  user_bcs_func = HydroNoInflow;
+  // user_bcs_func = HydroNoInflow;
 
   //
   user_hist_func = RecoiledDiskHistory;
@@ -204,6 +204,94 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
             0.5 * (SQR(u0_(m, IM1, k, j, i)) + SQR(u0_(m, IM2, k, j, i)) +
                    SQR(u0_(m, IM3, k, j, i)));
       });
+
+  return;
+}
+
+//
+// @YK: History variables
+//
+void RecoiledDiskHistory(HistoryData *pdata, Mesh *pm) {
+  // MeshBlockPack *pmbp = pm->pmb_pack;
+
+  pdata->nhist = 4;
+  pdata->label[0] = "M";
+  pdata->label[1] = "Lx";
+  pdata->label[2] = "Ly";
+  pdata->label[3] = "Lz";
+
+  // loop over all MeshBlocks in this pack
+  auto &indcs = pm->pmb_pack->pmesh->mb_indcs;
+  int is = indcs.is;
+  int nx1 = indcs.nx1;
+  int js = indcs.js;
+  int nx2 = indcs.nx2;
+  int ks = indcs.ks;
+  int nx3 = indcs.nx3;
+  const int nmkji = (pm->pmb_pack->nmb_thispack) * nx3 * nx2 * nx1;
+  const int nkji = nx3 * nx2 * nx1;
+  const int nji = nx2 * nx1;
+
+  // capture class variables for kernel
+  auto &u0_ = pm->pmb_pack->phydro->u0;
+  auto &w0_ = pm->pmb_pack->phydro->w0;
+  auto &size = pm->pmb_pack->pmb->mb_size;
+  int &nhist_ = pdata->nhist;
+
+  array_sum::GlobalSum sum_this_mb;
+
+  Kokkos::parallel_reduce(
+      "recoiled_disk_history", Kokkos::RangePolicy<>(DevExeSpace(), 0, nmkji),
+      KOKKOS_LAMBDA(const int &idx, array_sum::GlobalSum &mb_sum) {
+        // compute n,k,j,i indices of thread
+        int m = (idx) / nkji;
+        int k = (idx - m * nkji) / nji;
+        int j = (idx - m * nkji - k * nji) / nx1;
+        int i = (idx - m * nkji - k * nji - j * nx1) + is;
+        k += ks;
+        j += js;
+
+        Real vol = size.d_view(m).dx1 * size.d_view(m).dx2 * size.d_view(m).dx3;
+
+        Real &x1min = size.d_view(m).x1min;
+        Real &x1max = size.d_view(m).x1max;
+        const Real x1v = CellCenterX(i - is, indcs.nx1, x1min, x1max);
+
+        Real &x2min = size.d_view(m).x2min;
+        Real &x2max = size.d_view(m).x2max;
+        const Real x2v = CellCenterX(j - js, indcs.nx2, x2min, x2max);
+
+        Real &x3min = size.d_view(m).x3min;
+        Real &x3max = size.d_view(m).x3max;
+        const Real x3v = CellCenterX(k - ks, indcs.nx3, x3min, x3max);
+
+        array_sum::GlobalSum hvars;
+
+        // total mass
+        hvars.the_array[0] = vol * u0_(m, IDN, k, j, i);
+
+        // total angular momentum
+        const Real px = u0_(m, IM1, k, j, i);
+        const Real py = u0_(m, IM2, k, j, i);
+        const Real pz = u0_(m, IM3, k, j, i);
+        hvars.the_array[1] = vol * (x2v * pz - x3v * py);
+        hvars.the_array[2] = vol * (x3v * px - x1v * pz);
+        hvars.the_array[3] = vol * (x1v * py - x2v * px);
+
+        // fill rest of the_array with zeros, if nhist < NHISTORY_VARIABLES
+        for (int n = nhist_; n < NHISTORY_VARIABLES; ++n) {
+          hvars.the_array[n] = 0.0;
+        }
+
+        // sum into parallel reduce
+        mb_sum += hvars;
+      },
+      Kokkos::Sum<array_sum::GlobalSum>(sum_this_mb));
+
+  // store data into hdata array
+  for (int n = 0; n < pdata->nhist; ++n) {
+    pdata->hdata[n] = sum_this_mb.the_array[n];
+  }
 
   return;
 }
@@ -444,92 +532,6 @@ void HydroNoInflow(Mesh *pm) {
               << std::endl
               << " MHD should not be enabled for this problem! " << std::endl;
     exit(EXIT_FAILURE);
-  }
-
-  return;
-}
-
-//
-// @YK: History variables
-//
-void RecoiledDiskHistory(HistoryData *pdata, Mesh *pm) {
-  // MeshBlockPack *pmbp = pm->pmb_pack;
-
-  pdata->nhist = 3;
-  pdata->label[0] = "Lx";
-  pdata->label[1] = "Ly";
-  pdata->label[2] = "Lz";
-
-  // loop over all MeshBlocks in this pack
-  auto &indcs = pm->pmb_pack->pmesh->mb_indcs;
-  int is = indcs.is;
-  int nx1 = indcs.nx1;
-  int js = indcs.js;
-  int nx2 = indcs.nx2;
-  int ks = indcs.ks;
-  int nx3 = indcs.nx3;
-  const int nmkji = (pm->pmb_pack->nmb_thispack) * nx3 * nx2 * nx1;
-  const int nkji = nx3 * nx2 * nx1;
-  const int nji = nx2 * nx1;
-
-  // capture class variables for kernel
-  auto &u0_ = pm->pmb_pack->phydro->u0;
-  auto &w0_ = pm->pmb_pack->phydro->w0;
-  auto &size = pm->pmb_pack->pmb->mb_size;
-  int &nhist_ = pdata->nhist;
-
-  array_sum::GlobalSum sum_this_mb;
-
-  Kokkos::parallel_reduce(
-      "gravitational_drag", Kokkos::RangePolicy<>(DevExeSpace(), 0, nmkji),
-      KOKKOS_LAMBDA(const int &idx, array_sum::GlobalSum &mb_sum) {
-        // compute n,k,j,i indices of thread
-        int m = (idx) / nkji;
-        int k = (idx - m * nkji) / nji;
-        int j = (idx - m * nkji - k * nji) / nx1;
-        int i = (idx - m * nkji - k * nji - j * nx1) + is;
-        k += ks;
-        j += js;
-
-        Real vol = size.d_view(m).dx1 * size.d_view(m).dx2 * size.d_view(m).dx3;
-
-        Real &x1min = size.d_view(m).x1min;
-        Real &x1max = size.d_view(m).x1max;
-        const Real x1v = CellCenterX(i - is, indcs.nx1, x1min, x1max);
-
-        Real &x2min = size.d_view(m).x2min;
-        Real &x2max = size.d_view(m).x2max;
-        const Real x2v = CellCenterX(j - js, indcs.nx2, x2min, x2max);
-
-        Real &x3min = size.d_view(m).x3min;
-        Real &x3max = size.d_view(m).x3max;
-        const Real x3v = CellCenterX(k - ks, indcs.nx3, x3min, x3max);
-
-        // angular momentum
-        array_sum::GlobalSum hvars;
-
-        const Real px = u0_(m, IM1, k, j, i);
-        const Real py = u0_(m, IM2, k, j, i);
-        const Real pz = u0_(m, IM3, k, j, i);
-
-        // l_x
-        hvars.the_array[0] = vol * (x2v * pz - x3v * py);
-        hvars.the_array[1] = vol * (x3v * px - x1v * pz);
-        hvars.the_array[2] = vol * (x1v * py - x2v * px);
-
-        // fill rest of the_array with zeros, if nhist < NHISTORY_VARIABLES
-        for (int n = nhist_; n < NHISTORY_VARIABLES; ++n) {
-          hvars.the_array[n] = 0.0;
-        }
-
-        // sum into parallel reduce
-        mb_sum += hvars;
-      },
-      Kokkos::Sum<array_sum::GlobalSum>(sum_this_mb));
-
-  // store data into hdata array
-  for (int n = 0; n < pdata->nhist; ++n) {
-    pdata->hdata[n] = sum_this_mb.the_array[n];
   }
 
   return;
