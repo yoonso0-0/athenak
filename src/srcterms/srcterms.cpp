@@ -44,7 +44,7 @@ SourceTerms::SourceTerms(std::string block, MeshBlockPack *pp, ParameterInput *p
   // @YK
   point_particle_gravity_at_center =
       pin->GetOrAddBoolean(block, "point_particle_gravity_at_center", false);
-  softening_length = pin->GetReal(block, "softening_length");
+  softening_length = pin->GetReal(block, "gravity_softening_length");
 
   // (1) read data for (constant) gravitational acceleration
   if (const_accel) {
@@ -136,17 +136,16 @@ void SourceTerms::PointParticleGravity(const DvceArray5D<Real> &w0,
       KOKKOS_LAMBDA(int m, int k, int j, int i) {
         Real &x1min = size.d_view(m).x1min;
         Real &x1max = size.d_view(m).x1max;
-        Real x1v = CellCenterX(i - is, indcs.nx1, x1min, x1max);
+        const Real x1v = CellCenterX(i - is, indcs.nx1, x1min, x1max);
 
         Real &x2min = size.d_view(m).x2min;
         Real &x2max = size.d_view(m).x2max;
-        Real x2v = CellCenterX(j - js, indcs.nx2, x2min, x2max);
+        const Real x2v = CellCenterX(j - js, indcs.nx2, x2min, x2max);
 
         Real &x3min = size.d_view(m).x3min;
         Real &x3max = size.d_view(m).x3max;
-        Real x3v = CellCenterX(k - ks, indcs.nx3, x3min, x3max);
+        const Real x3v = CellCenterX(k - ks, indcs.nx3, x3min, x3max);
 
-        // note: using GM=1 normalization
         const Real radius = std::sqrt(x1v * x1v + x2v * x2v + x3v * x3v);
 
         Real softened_one_over_r;
@@ -156,36 +155,40 @@ void SourceTerms::PointParticleGravity(const DvceArray5D<Real> &w0,
         } else {
           const Real u = radius * one_over_h;
           const Real u2 = SQR(u);
-          const Real u3 = u2 * u;
 
+          // Horner's method for polynomial evaluation
           if (radius < h_over_2) {
-            softened_one_over_r = one_over_h * (2.8 - 5.333333333333333 * u2 +
-                                                9.6 * SQR(u2) - 6.4 * u2 * u3);
+            softened_one_over_r =
+                one_over_h *
+                (2.8 + u2 * (-5.333333333333333 + u2 * (9.6 - 6.4 * u)));
           } else {
             softened_one_over_r =
-                (-0.06666666666666667 + 3.2 * u - 10.666666666666666 * u3 +
-                 16 * SQR(u2) - 9.6 * u2 * u3 + 2.1333333333333333 * SQR(u3)) /
+                (-0.06666666666666667 +
+                 u * (3.2 + u2 * (-10.666666666666666 +
+                                  u * (16.0 +
+                                       u * (-9.6 + 2.1333333333333333 * u))))) /
                 radius;
           }
         }
 
         const Real softened_inv_r3 =
-            SQR(softened_one_over_r) * softened_one_over_r;
+            softened_one_over_r * softened_one_over_r * softened_one_over_r;
 
+        // Pre-calculate source multipliers to eliminate redundant array
+        // reads/math
+        const Real dt_src = -bdt * softened_inv_r3;
+
+        // Update Conserved Variables
         u0(m, IEN, k, j, i) +=
-            -bdt *
-            (u0(m, IM1, k, j, i) * x1v + u0(m, IM2, k, j, i) * x2v +
-             u0(m, IM3, k, j, i) * x3v) *
-            softened_inv_r3;
-        u0(m, IM1, k, j, i) +=
-            -bdt * w0(m, IDN, k, j, i) * x1v * softened_inv_r3;
-        u0(m, IM2, k, j, i) +=
-            -bdt * w0(m, IDN, k, j, i) * x2v * softened_inv_r3;
-        u0(m, IM3, k, j, i) +=
-            -bdt * w0(m, IDN, k, j, i) * x3v * softened_inv_r3;
-      });
+            dt_src * (u0(m, IM1, k, j, i) * x1v + u0(m, IM2, k, j, i) * x2v +
+                      u0(m, IM3, k, j, i) * x3v);
 
-  return;
+        const Real dt_rho_src = dt_src * w0(m, IDN, k, j, i);
+
+        u0(m, IM1, k, j, i) += dt_rho_src * x1v;
+        u0(m, IM2, k, j, i) += dt_rho_src * x2v;
+        u0(m, IM3, k, j, i) += dt_rho_src * x3v;
+      });
 }
 
 //----------------------------------------------------------------------------------------
