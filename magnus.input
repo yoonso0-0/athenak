@@ -1,0 +1,97 @@
+# Athena++ (Kokkos version) input file
+
+<comment>
+problem = Hydro BHL accretion
+
+<job>
+basename  = bhl
+
+<mesh>
+nghost = 2        # Number of ghost cells
+nx1    = 64      # number of cells in x1-direction
+x1min  = -128.0    # minimum x1
+x1max  = 128.0     # maximum x1
+ix1_bc = user     # inner boundary
+ox1_bc = user     # outer boundary
+
+nx2    = 64      # number of cells in x2-direction
+x2min  = -128.0    # minimum x2
+x2max  = 128.0     # maximum x2
+ix2_bc = user     # inner boundary
+ox2_bc = user     # outer boundary
+
+nx3    = 64      # number of cells in x3-direction
+x3min  = -128.0    # minimum x3
+x3max  = 128.0     # maximum x3
+ix3_bc = user     # inner boundary
+ox3_bc = user     # outer boundary
+
+<meshblock>
+nx1  = 16         # Number of cells in each MeshBlock, X1-dir
+nx2  = 16         # Number of cells in each MeshBlock, X2-dir
+nx3  = 16         # Number of cells in each MeshBlock, X3-dir
+
+<mesh_refinement>
+refinement = static        # type of refinement
+
+<refined_region1>
+level = 4
+x1min = -0.1
+x1max = 0.1
+x2min = -0.1
+x2max = 0.1
+x3min = -0.1
+x3max = 0.1
+
+<time>
+evolution  = dynamic     # dynamic/kinematic/static
+integrator = rk2         # time integration algorithm
+cfl_number = 0.3         # The Courant, Friedrichs, & Lewy (CFL) Number
+nlim       = -1           # cycle limit
+tlim       = 1000.0     # time limit
+ndiag      = 100           # cycles between diagostic output
+
+<coord>
+general_rel = true       # general relativity
+a           = 0.5     # black hole spin a (0 <= a/M < 1)
+excise      = true       # excise r_ks <= 1.0
+dexcise     = 1.0e-8     # density inside excision
+pexcise     = 0.333e-10  # pressure inside excision
+
+<hydro>
+eos         = ideal      # EOS type
+reconstruct = plm        # spatial reconstruction method
+rsolver     = hlle       # Riemann-solver to be used
+dfloor      = 1.0e-8     # floor on density rho
+pfloor      = 0.333e-10  # floor on gas pressure p_gas
+gamma       = 1.3333333333333333  # ratio of specific heats Gamma
+fofc        = false       # Enable first order flux correction
+gamma_max   = 20.0       # Enable ceiling on Lorentz factor
+
+<problem>
+rho_inf = 1.0
+v_inf   = 0.2
+cs_inf  = 0.05
+volume_integral_rmax = 1000.0
+
+user_hist = true      # enroll user-defined history function
+
+
+<output1>
+file_type  = hst        # History output
+dt         = 10.0       # time increment between outputs
+user_hist_only = true   # only output user-defined history
+
+<output2>
+file_type  = bin        # Binary data dump
+slice_x2   = 0.0        # slice in x2 plane
+id         = slice_x2   # output id tag
+variable   = hydro_w    # variables to be output
+dt         = 10.0       # time increment between outputs
+
+<output3>
+file_type  = bin        # Binary data dump
+slice_x3   = 0.0        # slice in x3 plane
+id         = slice_x3   # output id tag
+variable   = hydro_w    # variables to be output
+dt         = 10.0       # time increment between outputs
