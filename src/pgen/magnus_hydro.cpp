@@ -346,7 +346,7 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
 
         Real rho_init, e_init;
 
-        if (r > 1.0) {
+        if (r > r_excise) {
           rho_init = bhl.rho_inf;
           e_init = bhl.e_inf;
           // e_init = (bhl.total_pressure_inf - magnetic_pressure) / gm1;
