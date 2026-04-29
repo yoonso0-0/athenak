@@ -70,6 +70,10 @@ struct bhl_pgen {
   // Real B_mag_inf;          // mag|B^i|
   // Real total_pressure_inf; // p_gas + b^2/2
 
+  // Real u1_prim;
+  // Real u2_prim;
+  // Real u3_prim;
+
   // Real arad; // radiation constant? -> ignore
 
   // Radius mask for computing gravitational drag
@@ -129,7 +133,7 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
   const Real rflux = (is_radiation_enabled)
                          ? ceil(r_excise + 1.0)
                          : 1.0 + sqrt(1.0 - SQR(bhl_accretion.spin));
-  grids.push_back(std::make_unique<SphericalGrid>(pmbp, 5, rflux));
+  grids.push_back(std::make_unique<SphericalGrid>(pmbp, 30, rflux));
   // NOTE(@pdmullen): Enroll additional radii for flux analysis by
   // pushing back the grids vector with additional SphericalGrid instances
   // grids.push_back(std::make_unique<SphericalGrid>(pmbp, 5, 2.0));
@@ -138,8 +142,12 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
   // grids.push_back(std::make_unique<SphericalGrid>(pmbp, 5, 5.0));
   // grids.push_back(std::make_unique<SphericalGrid>(pmbp, 5, 10.0));
   // grids.push_back(std::make_unique<SphericalGrid>(pmbp, 5, 20.0));
-  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, 5, 50.0));
-  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, 5, 100.0));
+  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, 30, 50.0));
+  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, 30, 100.0));
+  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, 30, 200.0));
+  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, 5, 400.0));
+  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, 5, 800.0));
+
   user_hist_func = BhlAccretionHistory;
 
   // Select either Hydro or MHD
@@ -345,14 +353,86 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
         Real cos_phi = cos(phi);
 
         Real rho_init, e_init;
+        Real u1_prim, u2_prim, u3_prim;
 
         if (r > r_excise) {
           rho_init = bhl.rho_inf;
           e_init = bhl.e_inf;
           // e_init = (bhl.total_pressure_inf - magnetic_pressure) / gm1;
+
+          //
+          // (Apr 27 2026) use ui_u0 as the input value
+          //
+          // Lapse and shift
+          const Real alpha = 1.0 / sqrt(-gupper[0][0]);
+          const Real beta1 = -gupper[0][1] / gupper[0][0];
+          const Real beta2 = -gupper[0][2] / gupper[0][0];
+          const Real beta3 = -gupper[0][3] / gupper[0][0];
+
+
+          const Real u1_u0 = -bhl.v_inf;
+          const Real u2_u0 = 0.0;
+          const Real u3_u0 = 0.0;
+
+          //
+          // (Apr 27 2026) use ui as the input value
+          //
+          // Real u1_u0, u2_u0, u3_u0;
+          // {
+          //   const Real u1 = -bhl.v_inf;
+          //   const Real u2 = 0.0;
+          //   const Real u3 = 0.0;
+          //   // Compute u^0 from normalization
+          //   const Real a = glower[0][0];
+          //   const Real b = 2.0 * (glower[0][1] * u1 + glower[0][2] * u2 +
+          //                         glower[0][3] * u3);
+          //   const Real c =
+          //       1.0 + (glower[1][1] * u1 * u1 + 2.0 * glower[1][2] * u1 * u2 +
+          //              2.0 * glower[1][3] * u1 * u3 + glower[2][2] * u2 * u2 +
+          //              2.0 * glower[2][3] * u2 * u3 + glower[3][3] * u3 * u3);
+          //   // u^i/u^0
+          //   const Real determinant = b * b - 4.0 * a * c;
+          //   if (determinant < 0.0) {
+          //     u1_u0 = 0.0;
+          //     u2_u0 = 0.0;
+          //     u3_u0 = 0.0;
+
+          //     std::cout << " x = " << x1v << ", y = " << x2v << ", z = " << x3v
+          //               << " / u^0 does not exist" << std::endl;
+
+          //   } else {
+          //     const Real u0 = -2.0 * c / (b - sqrt(b * b - 4.0 * a * c));
+          //     u1_u0 = u1 / u0;
+          //     u2_u0 = u2 / u0;
+          //     u3_u0 = u3 / u0;
+          //   }
+          // }
+
+          const Real v1 = (u1_u0 + beta1) / alpha;
+          const Real v2 = (u2_u0 + beta2) / alpha;
+          const Real v3 = (u3_u0 + beta3) / alpha;
+
+          const Real q = glower[1][1] * v1 * v1 + 2.0 * glower[1][2] * v1 * v2 +
+                         2.0 * glower[1][3] * v1 * v3 + glower[2][2] * v2 * v2 +
+                         2.0 * glower[2][3] * v2 * v3 + glower[3][3] * v3 * v3;
+
+          // if (q > 1.0) {
+          //   std::cout << " x = " << x1v << ", y = " << x2v << ", z = " << x3v
+          //             << " / q = " << q << std::endl;
+          // }
+
+          const Real lorentz_W = 1.0 / sqrt(1.0 - q);
+
+          u1_prim = lorentz_W * v1;
+          u2_prim = lorentz_W * v2;
+          u3_prim = lorentz_W * v3;
+
         } else {
           rho_init = bhl.dexcise;
           e_init = bhl.pexcise / gm1;
+          u1_prim = 0.0;
+          u2_prim = 0.0;
+          u3_prim = 0.0;
         }
 
         // Set hydro primitive variables. Internal energy e_init is adjusted to
@@ -360,9 +440,13 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
         w0_(m, IDN, k, j, i) = rho_init;
         w0_(m, IEN, k, j, i) = e_init;
 
-        w0_(m, IVX, k, j, i) = -bhl.u1_prim_inf;
-        w0_(m, IVY, k, j, i) = 0.0;
-        w0_(m, IVZ, k, j, i) = 0.0;
+        w0_(m, IVX, k, j, i) = u1_prim;
+        w0_(m, IVY, k, j, i) = u2_prim;
+        w0_(m, IVZ, k, j, i) = u3_prim;
+
+        // w0_(m, IVX, k, j, i) = -bhl.u1_prim_inf;
+        // w0_(m, IVY, k, j, i) = 0.0;
+        // w0_(m, IVZ, k, j, i) = 0.0;
       },
       Kokkos::Max<Real>(ptotmax));
 
@@ -639,6 +723,10 @@ void BhlAccretionBoundary(Mesh *pm) {
 
   // Set X1-BCs on w0 if Meshblock face is at the edge of computational domain
   // auto &bcc = pm->pmb_pack->pmhd->bcc0;
+
+  auto &size = pm->pmb_pack->pmb->mb_size;
+  auto &coord = pm->pmb_pack->pcoord->coord_data;
+
   par_for(
       "noinflow_hydro_x1", DevExeSpace(), 0, (nmb - 1), 0, (nvar - 1), 0,
       (n3 - 1), 0, (n2 - 1), KOKKOS_LAMBDA(int m, int n, int k, int j) {
@@ -660,16 +748,55 @@ void BhlAccretionBoundary(Mesh *pm) {
           // SQR(bhl.W_inf);
 
           for (int i = 0; i < ng; ++i) {
-            if (n == (IVX)) {
-              // w0_(m, n, k, j, ie + i + 1) = fmax(0.0, w0_(m, n, k, j, ie));
-              w0_(m, n, k, j, ie + i + 1) = -bhl.u1_prim_inf;
-            } else {
-              w0_(m, IDN, k, j, ie + i + 1) = bhl.rho_inf;
+            if (n == IDN) {
+              w0_(m, n, k, j, ie + i + 1) = bhl.rho_inf;
+            } else if (n == IEN) {
               w0_(m, IEN, k, j, ie + i + 1) = bhl.e_inf;
-              // w0_(m, IEN, k, j, ie + i + 1) = (bhl.total_pressure_inf -
-              // magnetic_pressure) / (bhl.gamma_adi - 1.0);
-              w0_(m, IVY, k, j, ie + i + 1) = 0;
-              w0_(m, IVZ, k, j, ie + i + 1) = 0;
+            } else {
+              Real &x1min = size.d_view(m).x1min;
+              Real &x1max = size.d_view(m).x1max;
+              Real x1v = CellCenterX(indcs.nx1 + i, indcs.nx1, x1min, x1max);
+
+              Real &x2min = size.d_view(m).x2min;
+              Real &x2max = size.d_view(m).x2max;
+              Real x2v = CellCenterX(j - js, indcs.nx2, x2min, x2max);
+
+              Real &x3min = size.d_view(m).x3min;
+              Real &x3max = size.d_view(m).x3max;
+              Real x3v = CellCenterX(k - ks, indcs.nx3, x3min, x3max);
+
+              Real glower[4][4], gupper[4][4];
+              ComputeMetricAndInverse(x1v, x2v, x3v, coord.is_minkowski,
+                                      coord.bh_spin, glower, gupper);
+
+              const Real alpha = 1.0 / sqrt(-gupper[0][0]);
+              const Real beta1 = -gupper[0][1] / gupper[0][0];
+              const Real beta2 = -gupper[0][2] / gupper[0][0];
+              const Real beta3 = -gupper[0][3] / gupper[0][0];
+
+              const Real u1_u0 = -bhl.v_inf;
+              const Real u2_u0 = 0.0;
+              const Real u3_u0 = 0.0;
+
+              const Real v1 = (u1_u0 + beta1) / alpha;
+              const Real v2 = (u2_u0 + beta2) / alpha;
+              const Real v3 = (u3_u0 + beta3) / alpha;
+
+              const Real q =
+                  glower[1][1] * v1 * v1 + 2.0 * glower[1][2] * v1 * v2 +
+                  2.0 * glower[1][3] * v1 * v3 + glower[2][2] * v2 * v2 +
+                  2.0 * glower[2][3] * v2 * v3 + glower[3][3] * v3 * v3;
+
+              const Real lorentz_W = 1.0 / sqrt(1.0 - q);
+
+              const Real u1_prim = lorentz_W * v1;
+              const Real u2_prim = lorentz_W * v2;
+              const Real u3_prim = lorentz_W * v3;
+
+              // w0_(m, n, k, j, ie + i + 1) = fmax(0.0, w0_(m, n, k, j, ie));
+              w0_(m, IVX, k, j, ie + i + 1) = u1_prim;
+              w0_(m, IVY, k, j, ie + i + 1) = u2_prim;
+              w0_(m, IVZ, k, j, ie + i + 1) = u3_prim;
             }
           }
         }
@@ -954,8 +1081,11 @@ void BhlAccretionHistory(HistoryData *pdata, Mesh *pm) {
   int nradii = grids.size();
   // int nflux = (is_mhd) ? 7 : 3;  // @YK : magnetic flux, momentum flux (3)
 
-  //  @YK: magnetic flux is removed for hydro magnus experiments!
-  int nflux = 12; // Mdot, Edot, Ldot, Momentum drag (3), Gravitational drag (6)
+  //  @YK: magnetic flux is removed for hydro magnus experiments
+  int nflux = 15; // Mdot, Edot, Ldot,
+                  // Momentum flux onto horizon (3),
+                  // GR source terms (3), Newtonian gravitational force (3),
+                  // Total T^0_i contained in the volume (3)
 
   // set number of and names of history variables for hydro or mhd
 
@@ -967,6 +1097,7 @@ void BhlAccretionHistory(HistoryData *pdata, Mesh *pm) {
   //  (4, 5, 6) Momentum flux in x, y, z
   //  (7, 8, 9) Gravitational drag in x, y, z, full GR source term
   //  (10, 11, 12) Gravitational drag in x, y, z, approximate Newtonian values
+  //  (13, 14, 15) Total T^0_i integrated over volume
   //
   pdata->nhist = nradii * nflux;
 
@@ -997,6 +1128,10 @@ void BhlAccretionHistory(HistoryData *pdata, Mesh *pm) {
     pdata->label[nflux * g + 9] = "Fgrav_x_" + rad_str;
     pdata->label[nflux * g + 10] = "Fgrav_y_" + rad_str;
     pdata->label[nflux * g + 11] = "Fgrav_z_" + rad_str;
+
+    pdata->label[nflux * g + 12] = "T^0_x_" + rad_str;
+    pdata->label[nflux * g + 13] = "T^0_y_" + rad_str;
+    pdata->label[nflux * g + 14] = "T^0_z_" + rad_str;
   }
 
   // go through angles at each radii:
@@ -1018,6 +1153,10 @@ void BhlAccretionHistory(HistoryData *pdata, Mesh *pm) {
     pdata->hdata[nflux * g + 9] = 0.0;
     pdata->hdata[nflux * g + 10] = 0.0;
     pdata->hdata[nflux * g + 11] = 0.0;
+
+    pdata->hdata[nflux * g + 12] = 0.0;
+    pdata->hdata[nflux * g + 13] = 0.0;
+    pdata->hdata[nflux * g + 14] = 0.0;
 
     // interpolate primitives (and cell-centered magnetic fields iff mhd)
     if (is_mhd) {
@@ -1208,7 +1347,8 @@ void BhlAccretionHistory(HistoryData *pdata, Mesh *pm) {
           const Real r_ks = KSRX(x1v, x2v, x3v, bhl.spin);
 
           // @YK : filter out masked volume
-          if ((r_ks > min_radius) and (r_ks < bhl.volume_integral_rmax)) {
+          if ((r_ks > (min_radius - 1e-10)) and
+              (r_ks < bhl.volume_integral_rmax)) {
 
             // Below are copy from coordinate source terms (coordinates.cpp)
 
@@ -1313,6 +1453,20 @@ void BhlAccretionHistory(HistoryData *pdata, Mesh *pm) {
             //   hvars.the_array[n] = 0.0;
             // }
 
+            // Total volume integral of T^0_i
+            // Lower vector indices
+            Real u_1 = glower[1][0] * u0 + glower[1][1] * u1 +
+                       glower[1][2] * u2 + glower[1][3] * u3;
+            Real u_2 = glower[2][0] * u0 + glower[2][1] * u1 +
+                       glower[2][2] * u2 + glower[2][3] * u3;
+            Real u_3 = glower[3][0] * u0 + glower[3][1] * u1 +
+                       glower[3][2] * u2 + glower[3][3] * u3;
+
+            // T^0_i = wtot * u^0 u_i
+            hvars.the_array[6] = vol * (wtot * u0 * u_1);
+            hvars.the_array[7] = vol * (wtot * u0 * u_2);
+            hvars.the_array[8] = vol * (wtot * u0 * u_3);
+
             // sum into parallel reduce
             mb_sum += hvars;
           }
@@ -1327,6 +1481,9 @@ void BhlAccretionHistory(HistoryData *pdata, Mesh *pm) {
     pdata->hdata[nflux * g + 9] += sum_this_mb.the_array[3];
     pdata->hdata[nflux * g + 10] += sum_this_mb.the_array[4];
     pdata->hdata[nflux * g + 11] += sum_this_mb.the_array[5];
+    pdata->hdata[nflux * g + 12] += sum_this_mb.the_array[6];
+    pdata->hdata[nflux * g + 13] += sum_this_mb.the_array[7];
+    pdata->hdata[nflux * g + 14] += sum_this_mb.the_array[8];
   }
 
   // fill rest of the_array with zeros, if nhist < NHISTORY_VARIABLES
