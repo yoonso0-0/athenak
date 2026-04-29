@@ -57,8 +57,10 @@ struct bhl_pgen {
   Real cs_inf; // Incoming wind sound speed
 
   // Controlling the B field configuration
-  // Real sigma_inf; // Incoming wind magnetization
-  // Real magnetic_field_angle_yz;
+  Real inv_plasma_beta_inf;
+  Real B_mag_inf;               // Incoming wind magnetic field magnitude
+  Real magnetic_field_angle_yz; // Angle of B in y-z plane (rad), measured from
+                                // z-axis
 
   // Temporary quantities required for primitive variable calculations
   Real e_inf;           // e = rho epsilon
@@ -67,7 +69,6 @@ struct bhl_pgen {
   Real W_inf;           // u^0 = W
   Real u1_prim_inf;     // u^1 = W v^1
   // Real comoving_b2;        // b^2
-  // Real B_mag_inf;          // mag|B^i|
   // Real total_pressure_inf; // p_gas + b^2/2
 
   // Real u1_prim;
@@ -206,11 +207,6 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
   bhl_accretion.dexcise = coord.dexcise;
   bhl_accretion.pexcise = coord.pexcise;
 
-  // Magnetic field - related variables
-  // bhl_accretion.sigma_inf = pin->GetReal("problem", "sigma_inf");
-  // bhl_accretion.magnetic_field_angle_yz =
-  // pin->GetReal("problem", "magnetic_field_angle_yz");
-
   // Gravitational drag - Mask
   bhl_accretion.volume_integral_rmax =
       pin->GetReal("problem", "volume_integral_rmax");
@@ -237,6 +233,21 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
   // bhl_accretion.pressure_inf + 0.5 * bhl_accretion.comoving_b2;
 
   const Real mach_number = bhl_accretion.v_inf / bhl_accretion.cs_inf;
+
+  // Magnetic field - related variables (MHD only)
+  if (pmbp->pmhd != nullptr) {
+    bhl_accretion.inv_plasma_beta_inf =
+        pin->GetReal("problem", "inv_plasma_beta_inf");
+    Real plasma_beta = 1.0 / bhl_accretion.inv_plasma_beta_inf;
+    const Real comoving_b2 = 2.0 * bhl_accretion.pressure_inf / plasma_beta;
+    bhl_accretion.B_mag_inf = bhl_accretion.W_inf * sqrt(comoving_b2);
+    bhl_accretion.magnetic_field_angle_yz =
+        pin->GetReal("problem", "magnetic_field_angle_yz");
+  } else {
+    bhl_accretion.inv_plasma_beta_inf = 0.0;
+    bhl_accretion.B_mag_inf = 0.0;
+    bhl_accretion.magnetic_field_angle_yz = 0.0;
+  }
 
   if (global_variable::my_rank == 0) {
     // Save the original stream state
@@ -272,6 +283,15 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
               << std::right << std::setw(val_width) << bhl_accretion.e_inf
               << '\n';
 
+    if (pmbp->pmhd != nullptr) {
+      std::cout << "  " << std::left << std::setw(name_width)
+                << "inv_plasma_beta_inf" << " = " << std::right
+                << std::setw(val_width) << bhl_accretion.inv_plasma_beta_inf
+                << '\n';
+      std::cout << "  " << std::left << std::setw(name_width) << "B_mag_inf"
+                << " = " << std::right << std::setw(val_width)
+                << bhl_accretion.B_mag_inf << '\n';
+    }
     std::cout << "========================================\n" << std::flush;
 
     // Restore the original formatting state
@@ -369,7 +389,6 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
           const Real beta2 = -gupper[0][2] / gupper[0][0];
           const Real beta3 = -gupper[0][3] / gupper[0][0];
 
-
           const Real u1_u0 = -bhl.v_inf;
           const Real u2_u0 = 0.0;
           const Real u3_u0 = 0.0;
@@ -387,9 +406,11 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
           //   const Real b = 2.0 * (glower[0][1] * u1 + glower[0][2] * u2 +
           //                         glower[0][3] * u3);
           //   const Real c =
-          //       1.0 + (glower[1][1] * u1 * u1 + 2.0 * glower[1][2] * u1 * u2 +
-          //              2.0 * glower[1][3] * u1 * u3 + glower[2][2] * u2 * u2 +
-          //              2.0 * glower[2][3] * u2 * u3 + glower[3][3] * u3 * u3);
+          //       1.0 + (glower[1][1] * u1 * u1 + 2.0 * glower[1][2] * u1 * u2
+          //       +
+          //              2.0 * glower[1][3] * u1 * u3 + glower[2][2] * u2 * u2
+          //              + 2.0 * glower[2][3] * u2 * u3 + glower[3][3] * u3 *
+          //              u3);
           //   // u^i/u^0
           //   const Real determinant = b * b - 4.0 * a * c;
           //   if (determinant < 0.0) {
@@ -397,7 +418,8 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
           //     u2_u0 = 0.0;
           //     u3_u0 = 0.0;
 
-          //     std::cout << " x = " << x1v << ", y = " << x2v << ", z = " << x3v
+          //     std::cout << " x = " << x1v << ", y = " << x2v << ", z = " <<
+          //     x3v
           //               << " / u^0 does not exist" << std::endl;
 
           //   } else {
@@ -454,47 +476,40 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
   //      initialize magnetic fields
   //  ---------------------------------------
   if (pmbp->pmhd != nullptr) {
-    std::cout << "### FATAL ERROR in " << __FILE__ << " at line " << __LINE__
-              << std::endl
-              << " This pgen does not support MHD " << std::endl;
-    exit(EXIT_FAILURE);
+    const Real By =
+        bhl_accretion.B_mag_inf * sin(bhl_accretion.magnetic_field_angle_yz);
+    const Real Bz =
+        bhl_accretion.B_mag_inf * cos(bhl_accretion.magnetic_field_angle_yz);
 
-    // compute vector potential over all faces
-    // int ncells1 = indcs.nx1 + 2 * (indcs.ng);
-    // int ncells2 = (indcs.nx2 > 1) ? (indcs.nx2 + 2 * (indcs.ng)) : 1;
-    // int ncells3 = (indcs.nx3 > 1) ? (indcs.nx3 + 2 * (indcs.ng)) : 1;
-    // DvceArray4D<Real> a1, a2, a3;
-    // Kokkos::realloc(a1, nmb, ncells3, ncells2, ncells1);
-    // Kokkos::realloc(a2, nmb, ncells3, ncells2, ncells1);
-    // Kokkos::realloc(a3, nmb, ncells3, ncells2, ncells1);
+    auto &b0 = pmbp->pmhd->b0;
+    par_for(
+        "pgen_mhd_b0", DevExeSpace(), 0, nmb - 1, ks, ke, js, je, is, ie,
+        KOKKOS_LAMBDA(int m, int k, int j, int i) {
+          b0.x1f(m, k, j, i) = 0.0;
+          b0.x2f(m, k, j, i) = By;
+          b0.x3f(m, k, j, i) = Bz;
+          if (i == ie) {
+            b0.x1f(m, k, j, i + 1) = 0.0;
+          }
+          if (j == je) {
+            b0.x2f(m, k, j + 1, i) = By;
+          }
+          if (k == ke) {
+            b0.x3f(m, k + 1, j, i) = Bz;
+          }
+        });
 
-    // auto &b0 = pmbp->pmhd->b0;
-
-    // par_for(
-    //     "pgen_b0", DevExeSpace(), 0, nmb - 1, ks, ke, js, je, is, ie,
-    //     KOKKOS_LAMBDA(int m, int k, int j, int i) {
-    //       // Compute face-centered fields from curl(A).
-    //       Real dx1 = size.d_view(m).dx1;
-    //       Real dx2 = size.d_view(m).dx2;
-    //       Real dx3 = size.d_view(m).dx3;
-
-    //       b0.x1f(m, k, j, i) = 0;
-
-    //       b0.x2f(m, k, j, i) = incoming_By;
-
-    //       b0.x3f(m, k, j, i) = incoming_Bz;
-
-    //       // Include extra face-component at edge of block in each direction
-    //       if (i == ie) {
-    //         b0.x1f(m, k, j, i + 1) = 0;
-    //       }
-    //       if (j == je) {
-    //         b0.x2f(m, k, j + 1, i) = incoming_By;
-    //       }
-    //       if (k == ke) {
-    //         b0.x3f(m, k + 1, j, i) = incoming_Bz;
-    //       }
-    //     });
+    auto &bcc0_ = pmbp->pmhd->bcc0;
+    par_for(
+        "pgen_mhd_bcc0", DevExeSpace(), 0, nmb - 1, ks, ke, js, je, is, ie,
+        KOKKOS_LAMBDA(int m, int k, int j, int i) {
+          bcc0_(m, IBX, k, j, i) =
+              0.5 * (b0.x1f(m, k, j, i) + b0.x1f(m, k, j, i + 1));
+          bcc0_(m, IBY, k, j, i) =
+              0.5 * (b0.x2f(m, k, j, i) + b0.x2f(m, k, j + 1, i));
+          bcc0_(m, IBZ, k, j, i) =
+              0.5 * (b0.x3f(m, k, j, i) + b0.x3f(m, k + 1, j, i));
+        });
   }
 
   // Convert primitives to conserved
@@ -637,11 +652,8 @@ void BhlAccretionBoundary(Mesh *pm) {
   // @YK : maybe okay if boundary is far away and the wind is slow?
   //
 
-  // const auto incoming_By = bhl.B_mag_inf * sin(bhl.magnetic_field_angle_yz);
-  // const auto incoming_Bz = bhl.B_mag_inf * cos(bhl.magnetic_field_angle_yz);
-
-  const auto incoming_By = 0.0;
-  const auto incoming_Bz = 0.0;
+  const auto incoming_By = bhl.B_mag_inf * sin(bhl.magnetic_field_angle_yz);
+  const auto incoming_Bz = bhl.B_mag_inf * cos(bhl.magnetic_field_angle_yz);
 
   // Select either Hydro or MHD
   DvceArray5D<Real> u0_, w0_;
@@ -1079,26 +1091,27 @@ void BhlAccretionHistory(HistoryData *pdata, Mesh *pm) {
   // index
   auto &grids = pm->pgen->spherical_grids;
   int nradii = grids.size();
-  // int nflux = (is_mhd) ? 7 : 3;  // @YK : magnetic flux, momentum flux (3)
-
-  //  @YK: magnetic flux is removed for hydro magnus experiments
-  int nflux = 15; // Mdot, Edot, Ldot,
-                  // Momentum flux onto horizon (3),
-                  // GR source terms (3), Newtonian gravitational force (3),
-                  // Total T^0_i contained in the volume (3)
+  //
+  // @YK : expand history for Magnus experiment
+  //
+  // Common (15):
+  //    * Mdot, Edot, Ldot
+  //    * Momentum flux T^r_i integrated over the sphere (3)
+  //    * GR source terms (3)
+  //    * Newtonian gravitational force (3)
+  //    * Total T^0_i contained in the volume (3)
+  //  - remark: if MHD, quantities above are *total* (T_hydro + T_EM)
+  //
+  // iff MHD (+12):
+  //    * Magnetic flux through the sphere
+  //    * (only EM part) Edot, Ldot
+  //    * (only EM part) Momentum flux T^r_i integrated over the sphere (3)
+  //    * (only EM part) GR source terms (3)
+  //    * (only EM part) Total T^0_i contained in the volume (3)
+  //
+  int nflux = (is_mhd) ? 27 : 15;
 
   // set number of and names of history variables for hydro or mhd
-
-  //
-  // @YK, Apr 2026 : Quantities to be computed at different radii
-  //  (1) mass accretion rate
-  //  (2) energy flux
-  //  (3) angular momentum flux
-  //  (4, 5, 6) Momentum flux in x, y, z
-  //  (7, 8, 9) Gravitational drag in x, y, z, full GR source term
-  //  (10, 11, 12) Gravitational drag in x, y, z, approximate Newtonian values
-  //  (13, 14, 15) Total T^0_i integrated over volume
-  //
   pdata->nhist = nradii * nflux;
 
   if (pdata->nhist > NHISTORY_VARIABLES) {
@@ -1121,42 +1134,45 @@ void BhlAccretionHistory(HistoryData *pdata, Mesh *pm) {
     pdata->label[nflux * g + 4] = "Pdot_y_" + rad_str;
     pdata->label[nflux * g + 5] = "Pdot_z_" + rad_str;
 
-    pdata->label[nflux * g + 6] = "GrSrc_x_" + rad_str;
-    pdata->label[nflux * g + 7] = "GrSrc_y_" + rad_str;
-    pdata->label[nflux * g + 8] = "GrSrc_z_" + rad_str;
+    pdata->label[nflux * g + 6] = "Gr_x_" + rad_str;
+    pdata->label[nflux * g + 7] = "Gr_y_" + rad_str;
+    pdata->label[nflux * g + 8] = "Gr_z_" + rad_str;
 
-    pdata->label[nflux * g + 9] = "Fgrav_x_" + rad_str;
-    pdata->label[nflux * g + 10] = "Fgrav_y_" + rad_str;
-    pdata->label[nflux * g + 11] = "Fgrav_z_" + rad_str;
+    pdata->label[nflux * g + 9] = "Nw_x_" + rad_str;
+    pdata->label[nflux * g + 10] = "Nw_y_" + rad_str;
+    pdata->label[nflux * g + 11] = "Nw_z_" + rad_str;
 
-    pdata->label[nflux * g + 12] = "T^0_x_" + rad_str;
-    pdata->label[nflux * g + 13] = "T^0_y_" + rad_str;
-    pdata->label[nflux * g + 14] = "T^0_z_" + rad_str;
+    pdata->label[nflux * g + 12] = "T^t_x_" + rad_str;
+    pdata->label[nflux * g + 13] = "T^t_y_" + rad_str;
+    pdata->label[nflux * g + 14] = "T^t_z_" + rad_str;
+
+    if (is_mhd) {
+      pdata->label[nflux * g + 15] = "Phi_" + rad_str;
+      pdata->label[nflux * g + 16] = "edot_em_" + rad_str;
+      pdata->label[nflux * g + 17] = "ldot_em_" + rad_str;
+
+      pdata->label[nflux * g + 18] = "Pdot_em_x_" + rad_str;
+      pdata->label[nflux * g + 19] = "Pdot_em_y_" + rad_str;
+      pdata->label[nflux * g + 20] = "Pdot_em_z_" + rad_str;
+
+      pdata->label[nflux * g + 21] = "Gr_em_x_" + rad_str;
+      pdata->label[nflux * g + 22] = "Gr_em_y_" + rad_str;
+      pdata->label[nflux * g + 23] = "Gr_em_z_" + rad_str;
+
+      pdata->label[nflux * g + 24] = "Tem^t_x_" + rad_str;
+      pdata->label[nflux * g + 25] = "Tem^t_y_" + rad_str;
+      pdata->label[nflux * g + 26] = "Tem^t_z_" + rad_str;
+    }
   }
 
-  // go through angles at each radii:
+  // Extract global quantities for each radii
   DualArray2D<Real> interpolated_bcc; // needed for MHD
+
   for (int g = 0; g < nradii; ++g) {
-    // zero fluxes at this radius
-    pdata->hdata[nflux * g + 0] = 0.0;
-    pdata->hdata[nflux * g + 1] = 0.0;
-    pdata->hdata[nflux * g + 2] = 0.0;
-
-    pdata->hdata[nflux * g + 3] = 0.0;
-    pdata->hdata[nflux * g + 4] = 0.0;
-    pdata->hdata[nflux * g + 5] = 0.0;
-
-    pdata->hdata[nflux * g + 6] = 0.0;
-    pdata->hdata[nflux * g + 7] = 0.0;
-    pdata->hdata[nflux * g + 8] = 0.0;
-
-    pdata->hdata[nflux * g + 9] = 0.0;
-    pdata->hdata[nflux * g + 10] = 0.0;
-    pdata->hdata[nflux * g + 11] = 0.0;
-
-    pdata->hdata[nflux * g + 12] = 0.0;
-    pdata->hdata[nflux * g + 13] = 0.0;
-    pdata->hdata[nflux * g + 14] = 0.0;
+    // initialize to zero
+    for (int i = 0; i < nflux; ++i) {
+      pdata->hdata[nflux * g + i] = 0.0;
+    }
 
     // interpolate primitives (and cell-centered magnetic fields iff mhd)
     if (is_mhd) {
@@ -1168,7 +1184,9 @@ void BhlAccretionHistory(HistoryData *pdata, Mesh *pm) {
     }
     grids[g]->InterpolateToSphere(nvars, w0_);
 
-    // compute fluxes
+    //
+    // compute surface integrals
+    //
     for (int n = 0; n < grids[g]->nangles; ++n) {
       // extract coordinate data at this angle
       Real r = grids[g]->radius;
@@ -1220,21 +1238,21 @@ void BhlAccretionHistory(HistoryData *pdata, Mesh *pm) {
                  glower[3][3] * u3;
 
       // Calculate 4-magnetic field (returns zero if not MHD)
-      // Real b0 = u_1 * int_bx + u_2 * int_by + u_3 * int_bz;
-      // Real b1 = (int_bx + b0 * u1) / u0;
-      // Real b2 = (int_by + b0 * u2) / u0;
-      // Real b3 = (int_bz + b0 * u3) / u0;
+      Real b0 = u_1 * int_bx + u_2 * int_by + u_3 * int_bz;
+      Real b1 = (int_bx + b0 * u1) / u0;
+      Real b2 = (int_by + b0 * u2) / u0;
+      Real b3 = (int_bz + b0 * u3) / u0;
 
       // compute b_\mu in CKS and b_sq (returns zero if not MHD)
-      // Real b_0 = glower[0][0] * b0 + glower[0][1] * b1 + glower[0][2] * b2 +
-      //            glower[0][3] * b3;
-      // Real b_1 = glower[1][0] * b0 + glower[1][1] * b1 + glower[1][2] * b2 +
-      //            glower[1][3] * b3;
-      // Real b_2 = glower[2][0] * b0 + glower[2][1] * b1 + glower[2][2] * b2 +
-      //            glower[2][3] * b3;
-      // Real b_3 = glower[3][0] * b0 + glower[3][1] * b1 + glower[3][2] * b2 +
-      //            glower[3][3] * b3;
-      // Real b_sq = b0 * b_0 + b1 * b_1 + b2 * b_2 + b3 * b_3;
+      Real b_0 = glower[0][0] * b0 + glower[0][1] * b1 + glower[0][2] * b2 +
+                 glower[0][3] * b3;
+      Real b_1 = glower[1][0] * b0 + glower[1][1] * b1 + glower[1][2] * b2 +
+                 glower[1][3] * b3;
+      Real b_2 = glower[2][0] * b0 + glower[2][1] * b1 + glower[2][2] * b2 +
+                 glower[2][3] * b3;
+      Real b_3 = glower[3][0] * b0 + glower[3][1] * b1 + glower[3][2] * b2 +
+                 glower[3][3] * b3;
+      Real b_sq = b0 * b_0 + b1 * b_1 + b2 * b_2 + b3 * b_3;
 
       // Transform CKS 4-velocity and 4-magnetic field to spherical KS
       Real a2 = SQR(spin);
@@ -1249,55 +1267,64 @@ void BhlAccretionHistory(HistoryData *pdata, Mesh *pm) {
       // contravariant r component of 4-velocity
       Real ur = drdx * u1 + drdy * u2 + drdz * u3;
       // contravariant r component of 4-magnetic field (returns zero if not MHD)
-      // Real br = drdx * b1 + drdy * b2 + drdz * b3;
+      Real br = drdx * b1 + drdy * b2 + drdz * b3;
       // covariant phi component of 4-velocity
       Real u_ph = (-r * sph - spin * cph) * sth * u_1 +
                   (r * cph - spin * sph) * sth * u_2;
       // covariant phi component of 4-magnetic field (returns zero if not MHD)
-      // Real b_ph = (-r * sph - spin * cph) * sth * b_1 +
-      // (r * cph - spin * sph) * sth * b_2;
+      Real b_ph = (-r * sph - spin * cph) * sth * b_1 +
+                  (r * cph - spin * sph) * sth * b_2;
 
       // integration params
       Real &domega = grids[g]->solid_angles.h_view(n);
       Real sqrtmdet = (r2 + SQR(spin * cos(theta)));
 
       // temporary variables
-      // Real wtot = int_dn + gamma * int_ie + b_sq;
-      // Real ptot = (gamma - 1.0) * int_ie + 0.5 * b_sq;
-      Real wtot = int_dn + eos_gamma * int_ie;
-      Real ptot = (eos_gamma - 1.0) * int_ie;
+      Real wtot = int_dn + eos_gamma * int_ie + b_sq;
+      Real ptot = (eos_gamma - 1.0) * int_ie + 0.5 * b_sq;
 
-      // compute mass flux
+      // mass accretion rate (note the minus sign)
       pdata->hdata[nflux * g + 0] += -1.0 * int_dn * ur * sqrtmdet * domega;
 
-      // compute energy flux
-      // Real t1_0 = wtot * ur * u_0 - br * b_0;
-      Real t1_0 = wtot * ur * u_0;
+      // total energy (T^0_0) outflux. note the sign
+      Real tr_0 = wtot * ur * u_0 - br * b_0;
+      pdata->hdata[nflux * g + 1] += tr_0 * sqrtmdet * domega;
 
-      // YK : there was a minus sign here, but removed it. T^r_t describes the
-      // energy "inflow"
-      pdata->hdata[nflux * g + 1] += t1_0 * sqrtmdet * domega;
+      // angular momentum flux (T^r_phi)
+      Real tr_ph = wtot * ur * u_ph - br * b_ph;
+      pdata->hdata[nflux * g + 2] += tr_ph * sqrtmdet * domega;
 
-      // compute angular momentum flux
-      // Real t1_3 = wtot * ur * u_ph - br * b_ph;
-      Real t1_3 = wtot * ur * u_ph;
-      pdata->hdata[nflux * g + 2] += t1_3 * sqrtmdet * domega;
-
-      // Compute linear momentum accretion rate
-      // Real tr_1 = (wtot * ur * u_1) + (ptot * drdx) - (br * b_1);
-      // Real tr_2 = (wtot * ur * u_2) + (ptot * drdy) - (br * b_2);
-      // Real tr_3 = (wtot * ur * u_3) + (ptot * drdz) - (br * b_3);
-      Real tr_1 = (wtot * ur * u_1) + (ptot * drdx);
-      Real tr_2 = (wtot * ur * u_2) + (ptot * drdy);
-      Real tr_3 = (wtot * ur * u_3) + (ptot * drdz);
-
+      // linear momentum flux (T^r_i)
+      Real tr_1 = (wtot * ur * u_1) + (ptot * drdx) - (br * b_1);
+      Real tr_2 = (wtot * ur * u_2) + (ptot * drdy) - (br * b_2);
+      Real tr_3 = (wtot * ur * u_3) + (ptot * drdz) - (br * b_3);
       pdata->hdata[nflux * g + 3] += tr_1 * sqrtmdet * domega;
       pdata->hdata[nflux * g + 4] += tr_2 * sqrtmdet * domega;
       pdata->hdata[nflux * g + 5] += tr_3 * sqrtmdet * domega;
+
+      if (is_mhd) {
+        // magnetic flux
+        pdata->hdata[nflux * g + 15] +=
+            0.5 * fabs(br * u0 - b0 * ur) * sqrtmdet * domega;
+        // Edot (EM part only)
+        pdata->hdata[nflux * g + 16] +=
+            (b_sq * ur * u_0 - br * b_0) * sqrtmdet * domega;
+        // Ldot (EM part only)
+        pdata->hdata[nflux * g + 17] +=
+            (b_sq * ur * u_ph - br * b_ph) * sqrtmdet * domega;
+
+        // linear momentum flux (T^r_i), (EM part only)
+        Real tEMr_1 = (b_sq * ur * u_1) + (0.5 * b_sq * drdx) - (br * b_1);
+        Real tEMr_2 = (b_sq * ur * u_2) + (0.5 * b_sq * drdy) - (br * b_2);
+        Real tEMr_3 = (b_sq * ur * u_3) + (0.5 * b_sq * drdz) - (br * b_3);
+        pdata->hdata[nflux * g + 18] += tEMr_1 * sqrtmdet * domega;
+        pdata->hdata[nflux * g + 19] += tEMr_2 * sqrtmdet * domega;
+        pdata->hdata[nflux * g + 20] += tEMr_3 * sqrtmdet * domega;
+      }
     }
 
     //
-    // Compute volume source terms
+    // compute volume integrals
     //
 
     // loop over all MeshBlocks in this pack
@@ -1356,6 +1383,11 @@ void BhlAccretionHistory(HistoryData *pdata, Mesh *pm) {
             Real glower[4][4], gupper[4][4];
             ComputeMetricAndInverse(x1v, x2v, x3v, flat, spin, glower, gupper);
 
+            // compute derivatives of metric.
+            Real dg_dx1[4][4], dg_dx2[4][4], dg_dx3[4][4];
+            ComputeMetricDerivatives(x1v, x2v, x3v, flat, spin, dg_dx1, dg_dx2,
+                                     dg_dx3);
+
             // Extract primitives
             const Real &rho = w0_(m, IDN, k, j, i);
             const Real &uu1 = w0_(m, IVX, k, j, i);
@@ -1364,7 +1396,7 @@ void BhlAccretionHistory(HistoryData *pdata, Mesh *pm) {
             const Real &eint = w0_(m, IEN, k, j, i);
             // Real pgas = eos.IdealGasPressure(prim(m,IEN,k,j,i));
 
-            // Calculate 4-velocity (exploiting symmetry of metric)
+            // Calculate 4-velocity
             Real uu_sq =
                 glower[1][1] * uu1 * uu1 + 2.0 * glower[1][2] * uu1 * uu2 +
                 2.0 * glower[1][3] * uu1 * uu3 + glower[2][2] * uu2 * uu2 +
@@ -1376,27 +1408,53 @@ void BhlAccretionHistory(HistoryData *pdata, Mesh *pm) {
             Real u2 = uu2 - alpha * gamma * gupper[0][2];
             Real u3 = uu3 - alpha * gamma * gupper[0][3];
 
+            // lower vector indices
+            Real u_1 = glower[1][0] * u0 + glower[1][1] * u1 +
+                       glower[1][2] * u2 + glower[1][3] * u3;
+            Real u_2 = glower[2][0] * u0 + glower[2][1] * u1 +
+                       glower[2][2] * u2 + glower[2][3] * u3;
+            Real u_3 = glower[3][0] * u0 + glower[3][1] * u1 +
+                       glower[3][2] * u2 + glower[3][3] * u3;
+
+            // calculate 4-magnetic field (returns zero if not MHD)
+            Real bb1 = 0.0, bb2 = 0.0, bb3 = 0.0;
+            if (is_mhd) {
+              bb1 = bcc0_(m, IBX, k, j, i);
+              bb2 = bcc0_(m, IBY, k, j, i);
+              bb3 = bcc0_(m, IBZ, k, j, i);
+            }
+            Real b0 = u_1 * bb1 + u_2 * bb2 + u_3 * bb3;
+            Real b1 = (bb1 + b0 * u1) / u0;
+            Real b2 = (bb2 + b0 * u2) / u0;
+            Real b3 = (bb3 + b0 * u3) / u0;
+
+            // lower vector indices (returns zero if not MHD)
+            Real b_0 = glower[0][0] * b0 + glower[0][1] * b1 +
+                       glower[0][2] * b2 + glower[0][3] * b3;
+            Real b_1 = glower[1][0] * b0 + glower[1][1] * b1 +
+                       glower[1][2] * b2 + glower[1][3] * b3;
+            Real b_2 = glower[2][0] * b0 + glower[2][1] * b1 +
+                       glower[2][2] * b2 + glower[2][3] * b3;
+            Real b_3 = glower[3][0] * b0 + glower[3][1] * b1 +
+                       glower[3][2] * b2 + glower[3][3] * b3;
+            Real b_sq = b_0 * b0 + b_1 * b1 + b_2 * b2 + b_3 * b3;
+
             // Calculate stress-energy tensor
-            Real wtot = rho + eos_gamma * eint;
-            Real ptot = (eos_gamma - 1.0) * eint;
+            Real wtot = rho + eos_gamma * eint + b_sq;
+            Real ptot = (eos_gamma - 1.0) * eint + 0.5 * b_sq;
             Real tt[4][4];
-            tt[0][0] = wtot * u0 * u0 + ptot * gupper[0][0];
-            tt[0][1] = wtot * u0 * u1 + ptot * gupper[0][1];
-            tt[0][2] = wtot * u0 * u2 + ptot * gupper[0][2];
-            tt[0][3] = wtot * u0 * u3 + ptot * gupper[0][3];
-            tt[1][1] = wtot * u1 * u1 + ptot * gupper[1][1];
-            tt[1][2] = wtot * u1 * u2 + ptot * gupper[1][2];
-            tt[1][3] = wtot * u1 * u3 + ptot * gupper[1][3];
-            tt[2][2] = wtot * u2 * u2 + ptot * gupper[2][2];
-            tt[2][3] = wtot * u2 * u3 + ptot * gupper[2][3];
-            tt[3][3] = wtot * u3 * u3 + ptot * gupper[3][3];
+            tt[0][0] = wtot * u0 * u0 + ptot * gupper[0][0] - b0 * b0;
+            tt[0][1] = wtot * u0 * u1 + ptot * gupper[0][1] - b0 * b1;
+            tt[0][2] = wtot * u0 * u2 + ptot * gupper[0][2] - b0 * b2;
+            tt[0][3] = wtot * u0 * u3 + ptot * gupper[0][3] - b0 * b3;
+            tt[1][1] = wtot * u1 * u1 + ptot * gupper[1][1] - b1 * b1;
+            tt[1][2] = wtot * u1 * u2 + ptot * gupper[1][2] - b1 * b2;
+            tt[1][3] = wtot * u1 * u3 + ptot * gupper[1][3] - b1 * b3;
+            tt[2][2] = wtot * u2 * u2 + ptot * gupper[2][2] - b2 * b2;
+            tt[2][3] = wtot * u2 * u3 + ptot * gupper[2][3] - b2 * b3;
+            tt[3][3] = wtot * u3 * u3 + ptot * gupper[3][3] - b3 * b3;
 
-            // compute derivatives of metric.
-            Real dg_dx1[4][4], dg_dx2[4][4], dg_dx3[4][4];
-            ComputeMetricDerivatives(x1v, x2v, x3v, flat, spin, dg_dx1, dg_dx2,
-                                     dg_dx3);
-
-            // Calculate source terms, exploiting symmetries
+            // Calculate source terms
             Real s_1 = 0.0, s_2 = 0.0, s_3 = 0.0;
             s_1 += 0.5 * dg_dx1[0][0] * tt[0][0];
             s_1 += dg_dx1[0][1] * tt[0][1];
@@ -1432,9 +1490,60 @@ void BhlAccretionHistory(HistoryData *pdata, Mesh *pm) {
             s_3 += 0.5 * dg_dx3[3][3] * tt[3][3];
             // ------------------------------------
 
+            // Calculate stress-energy tensor (MHD only)
+            Real ttem[4][4];
+            if (is_mhd) {
+              ttem[0][0] = b_sq * u0 * u0 + 0.5 * b_sq * gupper[0][0] - b0 * b0;
+              ttem[0][1] = b_sq * u0 * u1 + 0.5 * b_sq * gupper[0][1] - b0 * b1;
+              ttem[0][2] = b_sq * u0 * u2 + 0.5 * b_sq * gupper[0][2] - b0 * b2;
+              ttem[0][3] = b_sq * u0 * u3 + 0.5 * b_sq * gupper[0][3] - b0 * b3;
+              ttem[1][1] = b_sq * u1 * u1 + 0.5 * b_sq * gupper[1][1] - b1 * b1;
+              ttem[1][2] = b_sq * u1 * u2 + 0.5 * b_sq * gupper[1][2] - b1 * b2;
+              ttem[1][3] = b_sq * u1 * u3 + 0.5 * b_sq * gupper[1][3] - b1 * b3;
+              ttem[2][2] = b_sq * u2 * u2 + 0.5 * b_sq * gupper[2][2] - b2 * b2;
+              ttem[2][3] = b_sq * u2 * u3 + 0.5 * b_sq * gupper[2][3] - b2 * b3;
+              ttem[3][3] = b_sq * u3 * u3 + 0.5 * b_sq * gupper[3][3] - b3 * b3;
+            }
+            // Calculate source terms (MHD only)
+            Real sem_1 = 0.0, sem_2 = 0.0, sem_3 = 0.0;
+            if (is_mhd) {
+              sem_1 += 0.5 * dg_dx1[0][0] * ttem[0][0];
+              sem_1 += dg_dx1[0][1] * ttem[0][1];
+              sem_1 += dg_dx1[0][2] * ttem[0][2];
+              sem_1 += dg_dx1[0][3] * ttem[0][3];
+              sem_1 += 0.5 * dg_dx1[1][1] * ttem[1][1];
+              sem_1 += dg_dx1[1][2] * ttem[1][2];
+              sem_1 += dg_dx1[1][3] * ttem[1][3];
+              sem_1 += 0.5 * dg_dx1[2][2] * ttem[2][2];
+              sem_1 += dg_dx1[2][3] * ttem[2][3];
+              sem_1 += 0.5 * dg_dx1[3][3] * ttem[3][3];
+
+              sem_2 += 0.5 * dg_dx2[0][0] * ttem[0][0];
+              sem_2 += dg_dx2[0][1] * ttem[0][1];
+              sem_2 += dg_dx2[0][2] * ttem[0][2];
+              sem_2 += dg_dx2[0][3] * ttem[0][3];
+              sem_2 += 0.5 * dg_dx2[1][1] * ttem[1][1];
+              sem_2 += dg_dx2[1][2] * ttem[1][2];
+              sem_2 += dg_dx2[1][3] * ttem[1][3];
+              sem_2 += 0.5 * dg_dx2[2][2] * ttem[2][2];
+              sem_2 += dg_dx2[2][3] * ttem[2][3];
+              sem_2 += 0.5 * dg_dx2[3][3] * ttem[3][3];
+
+              sem_3 += 0.5 * dg_dx3[0][0] * ttem[0][0];
+              sem_3 += dg_dx3[0][1] * ttem[0][1];
+              sem_3 += dg_dx3[0][2] * ttem[0][2];
+              sem_3 += dg_dx3[0][3] * ttem[0][3];
+              sem_3 += 0.5 * dg_dx3[1][1] * ttem[1][1];
+              sem_3 += dg_dx3[1][2] * ttem[1][2];
+              sem_3 += dg_dx3[1][3] * ttem[1][3];
+              sem_3 += 0.5 * dg_dx3[2][2] * ttem[2][2];
+              sem_3 += dg_dx3[2][3] * ttem[2][3];
+              sem_3 += 0.5 * dg_dx3[3][3] * ttem[3][3];
+            }
+
             array_sum::GlobalSum hvars;
 
-            // source terms
+            // GR source terms
             hvars.the_array[0] = vol * s_1;
             hvars.the_array[1] = vol * s_2;
             hvars.the_array[2] = vol * s_3;
@@ -1447,25 +1556,22 @@ void BhlAccretionHistory(HistoryData *pdata, Mesh *pm) {
             hvars.the_array[4] = vol * rho * x2v * one_over_r3;
             hvars.the_array[5] = vol * rho * x3v * one_over_r3;
 
-            // // fill rest of the_array with zeros, if nhist <
-            // NHISTORY_VARIABLES for (int n = nhist_; n < NHISTORY_VARIABLES;
-            // ++n) {
-            //   hvars.the_array[n] = 0.0;
-            // }
+            // T^0_i
+            hvars.the_array[6] = vol * (wtot * u0 * u_1 - b0 * b_1);
+            hvars.the_array[7] = vol * (wtot * u0 * u_2 - b0 * b_2);
+            hvars.the_array[8] = vol * (wtot * u0 * u_3 - b0 * b_3);
 
-            // Total volume integral of T^0_i
-            // Lower vector indices
-            Real u_1 = glower[1][0] * u0 + glower[1][1] * u1 +
-                       glower[1][2] * u2 + glower[1][3] * u3;
-            Real u_2 = glower[2][0] * u0 + glower[2][1] * u1 +
-                       glower[2][2] * u2 + glower[2][3] * u3;
-            Real u_3 = glower[3][0] * u0 + glower[3][1] * u1 +
-                       glower[3][2] * u2 + glower[3][3] * u3;
+            if (is_mhd) {
+              // GR source terms (EM part only)
+              hvars.the_array[9] = vol * sem_1;
+              hvars.the_array[10] = vol * sem_2;
+              hvars.the_array[11] = vol * sem_3;
 
-            // T^0_i = wtot * u^0 u_i
-            hvars.the_array[6] = vol * (wtot * u0 * u_1);
-            hvars.the_array[7] = vol * (wtot * u0 * u_2);
-            hvars.the_array[8] = vol * (wtot * u0 * u_3);
+              // T^0_i (EM part only)
+              hvars.the_array[12] = vol * (b_sq * u0 * u_1 - b0 * b_1);
+              hvars.the_array[13] = vol * (b_sq * u0 * u_2 - b0 * b_2);
+              hvars.the_array[14] = vol * (b_sq * u0 * u_3 - b0 * b_3);
+            }
 
             // sum into parallel reduce
             mb_sum += hvars;
@@ -1484,6 +1590,15 @@ void BhlAccretionHistory(HistoryData *pdata, Mesh *pm) {
     pdata->hdata[nflux * g + 12] += sum_this_mb.the_array[6];
     pdata->hdata[nflux * g + 13] += sum_this_mb.the_array[7];
     pdata->hdata[nflux * g + 14] += sum_this_mb.the_array[8];
+
+    if (is_mhd) {
+      pdata->hdata[nflux * g + 21] += sum_this_mb.the_array[9];
+      pdata->hdata[nflux * g + 22] += sum_this_mb.the_array[10];
+      pdata->hdata[nflux * g + 23] += sum_this_mb.the_array[11];
+      pdata->hdata[nflux * g + 24] += sum_this_mb.the_array[12];
+      pdata->hdata[nflux * g + 25] += sum_this_mb.the_array[13];
+      pdata->hdata[nflux * g + 26] += sum_this_mb.the_array[14];
+    }
   }
 
   // fill rest of the_array with zeros, if nhist < NHISTORY_VARIABLES
