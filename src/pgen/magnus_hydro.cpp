@@ -134,20 +134,22 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
   const Real rflux = (is_radiation_enabled)
                          ? ceil(r_excise + 1.0)
                          : 1.0 + sqrt(1.0 - SQR(bhl_accretion.spin));
-  grids.push_back(std::make_unique<SphericalGrid>(pmbp, 30, rflux));
-  // NOTE(@pdmullen): Enroll additional radii for flux analysis by
-  // pushing back the grids vector with additional SphericalGrid instances
-  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, 5, 2.0));
-  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, 5, 3.0));
-  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, 5, 4.0));
-  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, 5, 5.0));
-  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, 5, 10.0));
-  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, 5, 20.0));
-  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, 30, 50.0));
-  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, 30, 100.0));
-  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, 30, 200.0));
-  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, 5, 400.0));
-  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, 5, 800.0));
+  const int nlev_sphere = pin->GetInteger("problem", "sphere_nlev");
+  grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, rflux));
+  // Enroll additional radii
+  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 2.0));
+  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 3.0));
+  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 4.0));
+  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 5.0));
+  // // grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 8.0));
+  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 10.0));
+  // // grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 16.0));
+  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 20.0));
+  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 40.0));
+  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 80.0));
+  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 160.0));
+  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 320.0));
+  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 640.0));
 
   user_hist_func = BhlAccretionHistory;
 
@@ -1059,6 +1061,19 @@ void BhlAccretionBoundary(Mesh *pm) {
 }
 
 //----------------------------------------------------------------------------------------
+// Contract the upper-triangular stress-energy tensor T^{mu nu} (mu<=nu stored)
+// against the metric derivative: S = 0.5 (partial g_{mu nu}) T^{mu nu}.
+// Used for GR momentum source terms in BhlAccretionHistory.
+
+KOKKOS_INLINE_FUNCTION
+Real ContractSourceTerm(const Real dg[][4], const Real T[][4]) {
+  return 0.5 * dg[0][0] * T[0][0] + dg[0][1] * T[0][1] + dg[0][2] * T[0][2] +
+         dg[0][3] * T[0][3] + 0.5 * dg[1][1] * T[1][1] + dg[1][2] * T[1][2] +
+         dg[1][3] * T[1][3] + 0.5 * dg[2][2] * T[2][2] + dg[2][3] * T[2][3] +
+         0.5 * dg[3][3] * T[3][3];
+}
+
+//----------------------------------------------------------------------------------------
 // Function for computing accretion fluxes through constant spherical KS radius
 // surfaces
 
@@ -1323,281 +1338,242 @@ void BhlAccretionHistory(HistoryData *pdata, Mesh *pm) {
       }
     }
 
-    //
-    // compute volume integrals
-    //
+  } // end per-radius surface integral loop
 
-    // loop over all MeshBlocks in this pack
-    auto &indcs = pm->pmb_pack->pmesh->mb_indcs;
-    int is = indcs.is;
-    int js = indcs.js;
-    int ks = indcs.ks;
-    const int nmkji = (pmbp->nmb_thispack) * indcs.nx3 * indcs.nx2 * indcs.nx1;
-    const int nkji = indcs.nx3 * indcs.nx2 * indcs.nx1;
-    const int nji = indcs.nx2 * indcs.nx1;
-    auto &size = pm->pmb_pack->pmb->mb_size;
-    int &nhist_ = pdata->nhist;
+  //
+  // compute volume integrals in a single pass over all mesh cells
+  //
 
-    const Real min_radius = grids[g]->radius;
-    auto bhl = bhl_accretion;
+  // nvol = GlobalSum slots per radius; total must fit in NREDUCTION_VARIABLES
+  const int nvol = 15;
+  if (nradii * nvol > NREDUCTION_VARIABLES) {
+    std::cout << "### FATAL ERROR in " << __FILE__ << " at line " << __LINE__
+              << std::endl
+              << "nradii * 15 exceeds NREDUCTION_VARIABLES ("
+              << NREDUCTION_VARIABLES << "). Reduce the number of history"
+              << " radii or increase NREDUCTION_VARIABLES." << std::endl;
+    exit(EXIT_FAILURE);
+  }
 
-    array_sum::GlobalSum sum_this_mb;
+  // loop over all MeshBlocks in this pack
+  auto &indcs = pm->pmb_pack->pmesh->mb_indcs;
+  int is = indcs.is;
+  int js = indcs.js;
+  int ks = indcs.ks;
+  const int nmkji = (pmbp->nmb_thispack) * indcs.nx3 * indcs.nx2 * indcs.nx1;
+  const int nkji = indcs.nx3 * indcs.nx2 * indcs.nx1;
+  const int nji = indcs.nx2 * indcs.nx1;
+  auto &size = pm->pmb_pack->pmb->mb_size;
+  auto bhl = bhl_accretion;
 
-    Kokkos::parallel_reduce(
-        "gravitational_drag", Kokkos::RangePolicy<>(DevExeSpace(), 0, nmkji),
-        KOKKOS_LAMBDA(const int &idx, array_sum::GlobalSum &mb_sum) {
-          // compute m,k,j,i indices of thread and call function
-          int m = (idx) / nkji;
-          int k = (idx - m * nkji) / nji;
-          int j = (idx - m * nkji - k * nji) / indcs.nx1;
-          int i = (idx - m * nkji - k * nji - j * indcs.nx1) + is;
-          k += ks;
-          j += js;
+  // copy shell inner radii to a device-accessible view
+  Kokkos::View<Real *> d_radii("vol_radii", nradii);
+  {
+    auto h_radii = Kokkos::create_mirror_view(d_radii);
+    for (int g = 0; g < nradii; ++g)
+      h_radii(g) = grids[g]->radius;
+    Kokkos::deep_copy(d_radii, h_radii);
+  }
 
-          // Volume & Cell-centered coordinates & 1/r^3
-          Real vol =
-              size.d_view(m).dx1 * size.d_view(m).dx2 * size.d_view(m).dx3;
+  // @YK : minimum shell boundary = inner edge of masked (excised) region
+  Real min_radius_all = grids[0]->radius;
+  for (int g = 1; g < nradii; ++g)
+    min_radius_all = std::min(min_radius_all, grids[g]->radius);
 
-          Real &x1min = size.d_view(m).x1min;
-          Real &x1max = size.d_view(m).x1max;
-          Real x1v = CellCenterX(i - is, indcs.nx1, x1min, x1max);
+  array_sum::GlobalSum sum_all;
+  Kokkos::parallel_reduce(
+      "bhl_vol_integral", Kokkos::RangePolicy<>(DevExeSpace(), 0, nmkji),
+      KOKKOS_LAMBDA(const int &idx, array_sum::GlobalSum &mb_sum) {
+        // compute m,k,j,i indices of thread and call function
+        int m = (idx) / nkji;
+        int k = (idx - m * nkji) / nji;
+        int j = (idx - m * nkji - k * nji) / indcs.nx1;
+        int i = (idx - m * nkji - k * nji - j * indcs.nx1) + is;
+        k += ks;
+        j += js;
 
-          Real &x2min = size.d_view(m).x2min;
-          Real &x2max = size.d_view(m).x2max;
-          Real x2v = CellCenterX(j - js, indcs.nx2, x2min, x2max);
+        // Volume & Cell-centered coordinates
+        Real vol = size.d_view(m).dx1 * size.d_view(m).dx2 * size.d_view(m).dx3;
 
-          Real &x3min = size.d_view(m).x3min;
-          Real &x3max = size.d_view(m).x3max;
-          Real x3v = CellCenterX(k - ks, indcs.nx3, x3min, x3max);
+        Real &x1min = size.d_view(m).x1min;
+        Real &x1max = size.d_view(m).x1max;
+        Real x1v = CellCenterX(i - is, indcs.nx1, x1min, x1max);
 
-          // coordinate
-          const Real r_ks = KSRX(x1v, x2v, x3v, bhl.spin);
+        Real &x2min = size.d_view(m).x2min;
+        Real &x2max = size.d_view(m).x2max;
+        Real x2v = CellCenterX(j - js, indcs.nx2, x2min, x2max);
 
-          // @YK : filter out masked volume
-          if ((r_ks > (min_radius - 1e-10)) and
-              (r_ks < bhl.volume_integral_rmax)) {
+        Real &x3min = size.d_view(m).x3min;
+        Real &x3max = size.d_view(m).x3max;
+        Real x3v = CellCenterX(k - ks, indcs.nx3, x3min, x3max);
 
-            // Below are copy from coordinate source terms (coordinates.cpp)
+        // coordinate
+        const Real r_ks = KSRX(x1v, x2v, x3v, bhl.spin);
 
-            // ------------------------------------
-            Real glower[4][4], gupper[4][4];
-            ComputeMetricAndInverse(x1v, x2v, x3v, flat, spin, glower, gupper);
+        // @YK : filter out masked volume and cells beyond the outer boundary
+        if (r_ks <= min_radius_all - 1e-10 || r_ks >= bhl.volume_integral_rmax)
+          return;
 
-            // compute derivatives of metric.
-            Real dg_dx1[4][4], dg_dx2[4][4], dg_dx3[4][4];
-            ComputeMetricDerivatives(x1v, x2v, x3v, flat, spin, dg_dx1, dg_dx2,
-                                     dg_dx3);
+        // Below are copy from coordinate source terms (coordinates.cpp)
 
-            // Extract primitives
-            const Real &rho = w0_(m, IDN, k, j, i);
-            const Real &uu1 = w0_(m, IVX, k, j, i);
-            const Real &uu2 = w0_(m, IVY, k, j, i);
-            const Real &uu3 = w0_(m, IVZ, k, j, i);
-            const Real &eint = w0_(m, IEN, k, j, i);
-            // Real pgas = eos.IdealGasPressure(prim(m,IEN,k,j,i));
+        // ------------------------------------
+        Real glower[4][4], gupper[4][4];
+        ComputeMetricAndInverse(x1v, x2v, x3v, flat, spin, glower, gupper);
 
-            // Calculate 4-velocity
-            Real uu_sq =
-                glower[1][1] * uu1 * uu1 + 2.0 * glower[1][2] * uu1 * uu2 +
-                2.0 * glower[1][3] * uu1 * uu3 + glower[2][2] * uu2 * uu2 +
-                2.0 * glower[2][3] * uu2 * uu3 + glower[3][3] * uu3 * uu3;
-            Real alpha = sqrt(-1.0 / gupper[0][0]);
-            Real gamma = sqrt(1.0 + uu_sq);
-            Real u0 = gamma / alpha;
-            Real u1 = uu1 - alpha * gamma * gupper[0][1];
-            Real u2 = uu2 - alpha * gamma * gupper[0][2];
-            Real u3 = uu3 - alpha * gamma * gupper[0][3];
+        // compute derivatives of metric.
+        Real dg_dx1[4][4], dg_dx2[4][4], dg_dx3[4][4];
+        ComputeMetricDerivatives(x1v, x2v, x3v, flat, spin, dg_dx1, dg_dx2,
+                                 dg_dx3);
 
-            // lower vector indices
-            Real u_1 = glower[1][0] * u0 + glower[1][1] * u1 +
-                       glower[1][2] * u2 + glower[1][3] * u3;
-            Real u_2 = glower[2][0] * u0 + glower[2][1] * u1 +
-                       glower[2][2] * u2 + glower[2][3] * u3;
-            Real u_3 = glower[3][0] * u0 + glower[3][1] * u1 +
-                       glower[3][2] * u2 + glower[3][3] * u3;
+        // Extract primitives
+        const Real &rho = w0_(m, IDN, k, j, i);
+        const Real &uu1 = w0_(m, IVX, k, j, i);
+        const Real &uu2 = w0_(m, IVY, k, j, i);
+        const Real &uu3 = w0_(m, IVZ, k, j, i);
+        const Real &eint = w0_(m, IEN, k, j, i);
+        // Real pgas = eos.IdealGasPressure(prim(m,IEN,k,j,i));
 
-            // calculate 4-magnetic field (returns zero if not MHD)
-            Real bb1 = 0.0, bb2 = 0.0, bb3 = 0.0;
-            if (is_mhd) {
-              bb1 = bcc0_(m, IBX, k, j, i);
-              bb2 = bcc0_(m, IBY, k, j, i);
-              bb3 = bcc0_(m, IBZ, k, j, i);
-            }
-            Real b0 = u_1 * bb1 + u_2 * bb2 + u_3 * bb3;
-            Real b1 = (bb1 + b0 * u1) / u0;
-            Real b2 = (bb2 + b0 * u2) / u0;
-            Real b3 = (bb3 + b0 * u3) / u0;
+        // Calculate 4-velocity
+        Real uu_sq = glower[1][1] * uu1 * uu1 + 2.0 * glower[1][2] * uu1 * uu2 +
+                     2.0 * glower[1][3] * uu1 * uu3 + glower[2][2] * uu2 * uu2 +
+                     2.0 * glower[2][3] * uu2 * uu3 + glower[3][3] * uu3 * uu3;
+        Real alpha = sqrt(-1.0 / gupper[0][0]);
+        Real gamma = sqrt(1.0 + uu_sq);
+        Real u0 = gamma / alpha;
+        Real u1 = uu1 - alpha * gamma * gupper[0][1];
+        Real u2 = uu2 - alpha * gamma * gupper[0][2];
+        Real u3 = uu3 - alpha * gamma * gupper[0][3];
 
-            // lower vector indices (returns zero if not MHD)
-            Real b_0 = glower[0][0] * b0 + glower[0][1] * b1 +
-                       glower[0][2] * b2 + glower[0][3] * b3;
-            Real b_1 = glower[1][0] * b0 + glower[1][1] * b1 +
-                       glower[1][2] * b2 + glower[1][3] * b3;
-            Real b_2 = glower[2][0] * b0 + glower[2][1] * b1 +
-                       glower[2][2] * b2 + glower[2][3] * b3;
-            Real b_3 = glower[3][0] * b0 + glower[3][1] * b1 +
-                       glower[3][2] * b2 + glower[3][3] * b3;
-            Real b_sq = b_0 * b0 + b_1 * b1 + b_2 * b2 + b_3 * b3;
+        // lower vector indices
+        Real u_1 = glower[1][0] * u0 + glower[1][1] * u1 + glower[1][2] * u2 +
+                   glower[1][3] * u3;
+        Real u_2 = glower[2][0] * u0 + glower[2][1] * u1 + glower[2][2] * u2 +
+                   glower[2][3] * u3;
+        Real u_3 = glower[3][0] * u0 + glower[3][1] * u1 + glower[3][2] * u2 +
+                   glower[3][3] * u3;
 
-            // Calculate stress-energy tensor
-            Real wtot = rho + eos_gamma * eint + b_sq;
-            Real ptot = (eos_gamma - 1.0) * eint + 0.5 * b_sq;
-            Real tt[4][4];
-            tt[0][0] = wtot * u0 * u0 + ptot * gupper[0][0] - b0 * b0;
-            tt[0][1] = wtot * u0 * u1 + ptot * gupper[0][1] - b0 * b1;
-            tt[0][2] = wtot * u0 * u2 + ptot * gupper[0][2] - b0 * b2;
-            tt[0][3] = wtot * u0 * u3 + ptot * gupper[0][3] - b0 * b3;
-            tt[1][1] = wtot * u1 * u1 + ptot * gupper[1][1] - b1 * b1;
-            tt[1][2] = wtot * u1 * u2 + ptot * gupper[1][2] - b1 * b2;
-            tt[1][3] = wtot * u1 * u3 + ptot * gupper[1][3] - b1 * b3;
-            tt[2][2] = wtot * u2 * u2 + ptot * gupper[2][2] - b2 * b2;
-            tt[2][3] = wtot * u2 * u3 + ptot * gupper[2][3] - b2 * b3;
-            tt[3][3] = wtot * u3 * u3 + ptot * gupper[3][3] - b3 * b3;
+        // calculate 4-magnetic field (returns zero if not MHD)
+        Real bb1 = 0.0, bb2 = 0.0, bb3 = 0.0;
+        if (is_mhd) {
+          bb1 = bcc0_(m, IBX, k, j, i);
+          bb2 = bcc0_(m, IBY, k, j, i);
+          bb3 = bcc0_(m, IBZ, k, j, i);
+        }
+        Real b0 = u_1 * bb1 + u_2 * bb2 + u_3 * bb3;
+        Real b1 = (bb1 + b0 * u1) / u0;
+        Real b2 = (bb2 + b0 * u2) / u0;
+        Real b3 = (bb3 + b0 * u3) / u0;
 
-            // Calculate source terms
-            Real s_1 = 0.0, s_2 = 0.0, s_3 = 0.0;
-            s_1 += 0.5 * dg_dx1[0][0] * tt[0][0];
-            s_1 += dg_dx1[0][1] * tt[0][1];
-            s_1 += dg_dx1[0][2] * tt[0][2];
-            s_1 += dg_dx1[0][3] * tt[0][3];
-            s_1 += 0.5 * dg_dx1[1][1] * tt[1][1];
-            s_1 += dg_dx1[1][2] * tt[1][2];
-            s_1 += dg_dx1[1][3] * tt[1][3];
-            s_1 += 0.5 * dg_dx1[2][2] * tt[2][2];
-            s_1 += dg_dx1[2][3] * tt[2][3];
-            s_1 += 0.5 * dg_dx1[3][3] * tt[3][3];
+        // lower vector indices (returns zero if not MHD)
+        Real b_0 = glower[0][0] * b0 + glower[0][1] * b1 + glower[0][2] * b2 +
+                   glower[0][3] * b3;
+        Real b_1 = glower[1][0] * b0 + glower[1][1] * b1 + glower[1][2] * b2 +
+                   glower[1][3] * b3;
+        Real b_2 = glower[2][0] * b0 + glower[2][1] * b1 + glower[2][2] * b2 +
+                   glower[2][3] * b3;
+        Real b_3 = glower[3][0] * b0 + glower[3][1] * b1 + glower[3][2] * b2 +
+                   glower[3][3] * b3;
+        Real b_sq = b_0 * b0 + b_1 * b1 + b_2 * b2 + b_3 * b3;
 
-            s_2 += 0.5 * dg_dx2[0][0] * tt[0][0];
-            s_2 += dg_dx2[0][1] * tt[0][1];
-            s_2 += dg_dx2[0][2] * tt[0][2];
-            s_2 += dg_dx2[0][3] * tt[0][3];
-            s_2 += 0.5 * dg_dx2[1][1] * tt[1][1];
-            s_2 += dg_dx2[1][2] * tt[1][2];
-            s_2 += dg_dx2[1][3] * tt[1][3];
-            s_2 += 0.5 * dg_dx2[2][2] * tt[2][2];
-            s_2 += dg_dx2[2][3] * tt[2][3];
-            s_2 += 0.5 * dg_dx2[3][3] * tt[3][3];
+        // Calculate stress-energy tensor
+        Real wtot = rho + eos_gamma * eint + b_sq;
+        Real ptot = (eos_gamma - 1.0) * eint + 0.5 * b_sq;
+        Real tt[4][4];
+        tt[0][0] = wtot * u0 * u0 + ptot * gupper[0][0] - b0 * b0;
+        tt[0][1] = wtot * u0 * u1 + ptot * gupper[0][1] - b0 * b1;
+        tt[0][2] = wtot * u0 * u2 + ptot * gupper[0][2] - b0 * b2;
+        tt[0][3] = wtot * u0 * u3 + ptot * gupper[0][3] - b0 * b3;
+        tt[1][1] = wtot * u1 * u1 + ptot * gupper[1][1] - b1 * b1;
+        tt[1][2] = wtot * u1 * u2 + ptot * gupper[1][2] - b1 * b2;
+        tt[1][3] = wtot * u1 * u3 + ptot * gupper[1][3] - b1 * b3;
+        tt[2][2] = wtot * u2 * u2 + ptot * gupper[2][2] - b2 * b2;
+        tt[2][3] = wtot * u2 * u3 + ptot * gupper[2][3] - b2 * b3;
+        tt[3][3] = wtot * u3 * u3 + ptot * gupper[3][3] - b3 * b3;
 
-            s_3 += 0.5 * dg_dx3[0][0] * tt[0][0];
-            s_3 += dg_dx3[0][1] * tt[0][1];
-            s_3 += dg_dx3[0][2] * tt[0][2];
-            s_3 += dg_dx3[0][3] * tt[0][3];
-            s_3 += 0.5 * dg_dx3[1][1] * tt[1][1];
-            s_3 += dg_dx3[1][2] * tt[1][2];
-            s_3 += dg_dx3[1][3] * tt[1][3];
-            s_3 += 0.5 * dg_dx3[2][2] * tt[2][2];
-            s_3 += dg_dx3[2][3] * tt[2][3];
-            s_3 += 0.5 * dg_dx3[3][3] * tt[3][3];
-            // ------------------------------------
+        // GR source terms: S_k = 0.5 (partial_k g_{mu nu}) T^{mu nu}
+        Real s_1 = ContractSourceTerm(dg_dx1, tt);
+        Real s_2 = ContractSourceTerm(dg_dx2, tt);
+        Real s_3 = ContractSourceTerm(dg_dx3, tt);
 
-            // Calculate stress-energy tensor (MHD only)
-            Real ttem[4][4];
-            if (is_mhd) {
-              ttem[0][0] = b_sq * u0 * u0 + 0.5 * b_sq * gupper[0][0] - b0 * b0;
-              ttem[0][1] = b_sq * u0 * u1 + 0.5 * b_sq * gupper[0][1] - b0 * b1;
-              ttem[0][2] = b_sq * u0 * u2 + 0.5 * b_sq * gupper[0][2] - b0 * b2;
-              ttem[0][3] = b_sq * u0 * u3 + 0.5 * b_sq * gupper[0][3] - b0 * b3;
-              ttem[1][1] = b_sq * u1 * u1 + 0.5 * b_sq * gupper[1][1] - b1 * b1;
-              ttem[1][2] = b_sq * u1 * u2 + 0.5 * b_sq * gupper[1][2] - b1 * b2;
-              ttem[1][3] = b_sq * u1 * u3 + 0.5 * b_sq * gupper[1][3] - b1 * b3;
-              ttem[2][2] = b_sq * u2 * u2 + 0.5 * b_sq * gupper[2][2] - b2 * b2;
-              ttem[2][3] = b_sq * u2 * u3 + 0.5 * b_sq * gupper[2][3] - b2 * b3;
-              ttem[3][3] = b_sq * u3 * u3 + 0.5 * b_sq * gupper[3][3] - b3 * b3;
-            }
-            // Calculate source terms (MHD only)
-            Real sem_1 = 0.0, sem_2 = 0.0, sem_3 = 0.0;
-            if (is_mhd) {
-              sem_1 += 0.5 * dg_dx1[0][0] * ttem[0][0];
-              sem_1 += dg_dx1[0][1] * ttem[0][1];
-              sem_1 += dg_dx1[0][2] * ttem[0][2];
-              sem_1 += dg_dx1[0][3] * ttem[0][3];
-              sem_1 += 0.5 * dg_dx1[1][1] * ttem[1][1];
-              sem_1 += dg_dx1[1][2] * ttem[1][2];
-              sem_1 += dg_dx1[1][3] * ttem[1][3];
-              sem_1 += 0.5 * dg_dx1[2][2] * ttem[2][2];
-              sem_1 += dg_dx1[2][3] * ttem[2][3];
-              sem_1 += 0.5 * dg_dx1[3][3] * ttem[3][3];
+        // EM stress-energy tensor and GR source terms (MHD only)
+        Real sem_1 = 0.0, sem_2 = 0.0, sem_3 = 0.0;
+        if (is_mhd) {
+          Real ttem[4][4];
+          ttem[0][0] = b_sq * u0 * u0 + 0.5 * b_sq * gupper[0][0] - b0 * b0;
+          ttem[0][1] = b_sq * u0 * u1 + 0.5 * b_sq * gupper[0][1] - b0 * b1;
+          ttem[0][2] = b_sq * u0 * u2 + 0.5 * b_sq * gupper[0][2] - b0 * b2;
+          ttem[0][3] = b_sq * u0 * u3 + 0.5 * b_sq * gupper[0][3] - b0 * b3;
+          ttem[1][1] = b_sq * u1 * u1 + 0.5 * b_sq * gupper[1][1] - b1 * b1;
+          ttem[1][2] = b_sq * u1 * u2 + 0.5 * b_sq * gupper[1][2] - b1 * b2;
+          ttem[1][3] = b_sq * u1 * u3 + 0.5 * b_sq * gupper[1][3] - b1 * b3;
+          ttem[2][2] = b_sq * u2 * u2 + 0.5 * b_sq * gupper[2][2] - b2 * b2;
+          ttem[2][3] = b_sq * u2 * u3 + 0.5 * b_sq * gupper[2][3] - b2 * b3;
+          ttem[3][3] = b_sq * u3 * u3 + 0.5 * b_sq * gupper[3][3] - b3 * b3;
+          sem_1 = ContractSourceTerm(dg_dx1, ttem);
+          sem_2 = ContractSourceTerm(dg_dx2, ttem);
+          sem_3 = ContractSourceTerm(dg_dx3, ttem);
+        }
 
-              sem_2 += 0.5 * dg_dx2[0][0] * ttem[0][0];
-              sem_2 += dg_dx2[0][1] * ttem[0][1];
-              sem_2 += dg_dx2[0][2] * ttem[0][2];
-              sem_2 += dg_dx2[0][3] * ttem[0][3];
-              sem_2 += 0.5 * dg_dx2[1][1] * ttem[1][1];
-              sem_2 += dg_dx2[1][2] * ttem[1][2];
-              sem_2 += dg_dx2[1][3] * ttem[1][3];
-              sem_2 += 0.5 * dg_dx2[2][2] * ttem[2][2];
-              sem_2 += dg_dx2[2][3] * ttem[2][3];
-              sem_2 += 0.5 * dg_dx2[3][3] * ttem[3][3];
+        // Gravitational force using approximate Newtonian formula
+        const Real r2 = SQR(x1v) + SQR(x2v) + SQR(x3v);
+        const Real one_over_r3 = 1.0 / (r2 * sqrt(r2));
 
-              sem_3 += 0.5 * dg_dx3[0][0] * ttem[0][0];
-              sem_3 += dg_dx3[0][1] * ttem[0][1];
-              sem_3 += dg_dx3[0][2] * ttem[0][2];
-              sem_3 += dg_dx3[0][3] * ttem[0][3];
-              sem_3 += 0.5 * dg_dx3[1][1] * ttem[1][1];
-              sem_3 += dg_dx3[1][2] * ttem[1][2];
-              sem_3 += dg_dx3[1][3] * ttem[1][3];
-              sem_3 += 0.5 * dg_dx3[2][2] * ttem[2][2];
-              sem_3 += dg_dx3[2][3] * ttem[2][3];
-              sem_3 += 0.5 * dg_dx3[3][3] * ttem[3][3];
-            }
-
-            array_sum::GlobalSum hvars;
+        // accumulate into each shell that contains this cell (sum into parallel
+        // reduce)
+        for (int g = 0; g < nradii; ++g) {
+          if (r_ks > d_radii(g) - 1e-10) {
+            const int base = g * nvol;
 
             // GR source terms
-            hvars.the_array[0] = vol * s_1;
-            hvars.the_array[1] = vol * s_2;
-            hvars.the_array[2] = vol * s_3;
+            mb_sum.the_array[base + 0] += vol * s_1;
+            mb_sum.the_array[base + 1] += vol * s_2;
+            mb_sum.the_array[base + 2] += vol * s_3;
 
-            // Gravitational force using approximate Newtonian formula
-            const Real r2 = SQR(x1v) + SQR(x2v) + SQR(x3v);
-            const Real one_over_r3 = 1.0 / (r2 * sqrt(r2));
-
-            hvars.the_array[3] = vol * rho * x1v * one_over_r3;
-            hvars.the_array[4] = vol * rho * x2v * one_over_r3;
-            hvars.the_array[5] = vol * rho * x3v * one_over_r3;
+            mb_sum.the_array[base + 3] += vol * rho * x1v * one_over_r3;
+            mb_sum.the_array[base + 4] += vol * rho * x2v * one_over_r3;
+            mb_sum.the_array[base + 5] += vol * rho * x3v * one_over_r3;
 
             // T^0_i
-            hvars.the_array[6] = vol * (wtot * u0 * u_1 - b0 * b_1);
-            hvars.the_array[7] = vol * (wtot * u0 * u_2 - b0 * b_2);
-            hvars.the_array[8] = vol * (wtot * u0 * u_3 - b0 * b_3);
+            mb_sum.the_array[base + 6] += vol * (wtot * u0 * u_1 - b0 * b_1);
+            mb_sum.the_array[base + 7] += vol * (wtot * u0 * u_2 - b0 * b_2);
+            mb_sum.the_array[base + 8] += vol * (wtot * u0 * u_3 - b0 * b_3);
 
             if (is_mhd) {
               // GR source terms (EM part only)
-              hvars.the_array[9] = vol * sem_1;
-              hvars.the_array[10] = vol * sem_2;
-              hvars.the_array[11] = vol * sem_3;
+              mb_sum.the_array[base + 9] += vol * sem_1;
+              mb_sum.the_array[base + 10] += vol * sem_2;
+              mb_sum.the_array[base + 11] += vol * sem_3;
 
               // T^0_i (EM part only)
-              hvars.the_array[12] = vol * (b_sq * u0 * u_1 - b0 * b_1);
-              hvars.the_array[13] = vol * (b_sq * u0 * u_2 - b0 * b_2);
-              hvars.the_array[14] = vol * (b_sq * u0 * u_3 - b0 * b_3);
+              mb_sum.the_array[base + 12] += vol * (b_sq * u0 * u_1 - b0 * b_1);
+              mb_sum.the_array[base + 13] += vol * (b_sq * u0 * u_2 - b0 * b_2);
+              mb_sum.the_array[base + 14] += vol * (b_sq * u0 * u_3 - b0 * b_3);
             }
-
-            // sum into parallel reduce
-            mb_sum += hvars;
           }
-        },
-        Kokkos::Sum<array_sum::GlobalSum>(sum_this_mb));
-    Kokkos::fence();
+        }
+      },
+      Kokkos::Sum<array_sum::GlobalSum>(sum_all));
+  Kokkos::fence();
 
-    // store data into hdata array
-    pdata->hdata[nflux * g + 6] += sum_this_mb.the_array[0];
-    pdata->hdata[nflux * g + 7] += sum_this_mb.the_array[1];
-    pdata->hdata[nflux * g + 8] += sum_this_mb.the_array[2];
-    pdata->hdata[nflux * g + 9] += sum_this_mb.the_array[3];
-    pdata->hdata[nflux * g + 10] += sum_this_mb.the_array[4];
-    pdata->hdata[nflux * g + 11] += sum_this_mb.the_array[5];
-    pdata->hdata[nflux * g + 12] += sum_this_mb.the_array[6];
-    pdata->hdata[nflux * g + 13] += sum_this_mb.the_array[7];
-    pdata->hdata[nflux * g + 14] += sum_this_mb.the_array[8];
-
+  // store data into hdata array
+  for (int g = 0; g < nradii; ++g) {
+    const int base = g * nvol;
+    pdata->hdata[nflux * g + 6] += sum_all.the_array[base + 0];
+    pdata->hdata[nflux * g + 7] += sum_all.the_array[base + 1];
+    pdata->hdata[nflux * g + 8] += sum_all.the_array[base + 2];
+    pdata->hdata[nflux * g + 9] += sum_all.the_array[base + 3];
+    pdata->hdata[nflux * g + 10] += sum_all.the_array[base + 4];
+    pdata->hdata[nflux * g + 11] += sum_all.the_array[base + 5];
+    pdata->hdata[nflux * g + 12] += sum_all.the_array[base + 6];
+    pdata->hdata[nflux * g + 13] += sum_all.the_array[base + 7];
+    pdata->hdata[nflux * g + 14] += sum_all.the_array[base + 8];
     if (is_mhd) {
-      pdata->hdata[nflux * g + 21] += sum_this_mb.the_array[9];
-      pdata->hdata[nflux * g + 22] += sum_this_mb.the_array[10];
-      pdata->hdata[nflux * g + 23] += sum_this_mb.the_array[11];
-      pdata->hdata[nflux * g + 24] += sum_this_mb.the_array[12];
-      pdata->hdata[nflux * g + 25] += sum_this_mb.the_array[13];
-      pdata->hdata[nflux * g + 26] += sum_this_mb.the_array[14];
+      pdata->hdata[nflux * g + 21] += sum_all.the_array[base + 9];
+      pdata->hdata[nflux * g + 22] += sum_all.the_array[base + 10];
+      pdata->hdata[nflux * g + 23] += sum_all.the_array[base + 11];
+      pdata->hdata[nflux * g + 24] += sum_all.the_array[base + 12];
+      pdata->hdata[nflux * g + 25] += sum_all.the_array[base + 13];
+      pdata->hdata[nflux * g + 26] += sum_all.the_array[base + 14];
     }
   }
 
