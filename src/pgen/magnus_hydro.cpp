@@ -151,6 +151,8 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
   grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 320.0));
   grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 640.0));
 
+  grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 1e8));
+
   // grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 2.0));
   // grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 2.5));
   // grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 3.0));
@@ -219,8 +221,8 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
   bhl_accretion.pexcise = coord.pexcise;
 
   // Gravitational drag - Mask
-  bhl_accretion.volume_integral_rmax =
-      pin->GetReal("problem", "volume_integral_rmax");
+  // bhl_accretion.volume_integral_rmax =
+      // pin->GetReal("problem", "volume_integral_rmax");
 
   //  ---------------------------------------
   //    Compute auxiliary variables
