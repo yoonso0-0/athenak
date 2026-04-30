@@ -137,19 +137,28 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
   const int nlev_sphere = pin->GetInteger("problem", "sphere_nlev");
   grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, rflux));
   // Enroll additional radii
-  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 2.0));
+  grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 2.0));
   // grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 3.0));
   // grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 4.0));
-  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 5.0));
-  // // grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 8.0));
-  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 10.0));
-  // // grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 16.0));
-  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 20.0));
-  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 40.0));
-  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 80.0));
-  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 160.0));
-  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 320.0));
-  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 640.0));
+  grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 5.0));
+  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 8.0));
+  grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 10.0));
+  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 16.0));
+  grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 20.0));
+  grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 40.0));
+  grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 80.0));
+  grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 160.0));
+  grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 320.0));
+  grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 640.0));
+
+  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 2.0));
+  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 2.5));
+  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 3.0));
+  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 3.5));
+  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 4.0));
+  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 8.0));
+  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 16.0));
+  // grids.push_back(std::make_unique<SphericalGrid>(pmbp, nlev_sphere, 32.0));
 
   user_hist_func = BhlAccretionHistory;
 
@@ -1344,16 +1353,7 @@ void BhlAccretionHistory(HistoryData *pdata, Mesh *pm) {
   // compute volume integrals in a single pass over all mesh cells
   //
 
-  // nvol = GlobalSum slots per radius; total must fit in NREDUCTION_VARIABLES
-  const int nvol = 15;
-  if (nradii * nvol > NREDUCTION_VARIABLES) {
-    std::cout << "### FATAL ERROR in " << __FILE__ << " at line " << __LINE__
-              << std::endl
-              << "nradii * 15 exceeds NREDUCTION_VARIABLES ("
-              << NREDUCTION_VARIABLES << "). Reduce the number of history"
-              << " radii or increase NREDUCTION_VARIABLES." << std::endl;
-    exit(EXIT_FAILURE);
-  }
+  const int nvol = 15; // accumulator slots per radius
 
   // loop over all MeshBlocks in this pack
   auto &indcs = pm->pmb_pack->pmesh->mb_indcs;
@@ -1376,14 +1376,19 @@ void BhlAccretionHistory(HistoryData *pdata, Mesh *pm) {
   }
 
   // @YK : minimum shell boundary = inner edge of masked (excised) region
-  Real min_radius_all = grids[0]->radius;
-  for (int g = 1; g < nradii; ++g)
-    min_radius_all = std::min(min_radius_all, grids[g]->radius);
+  Real r_outer = 1.0 + sqrt(1.0 - SQR(bhl.spin));
+  // Real min_radius_all = grids[0]->radius;
+  // for (int g = 1; g < nradii; ++g)
+  //   min_radius_all = std::min(min_radius_all, grids[g]->radius);
 
-  array_sum::GlobalSum sum_all;
-  Kokkos::parallel_reduce(
+  // Use a device View + atomic adds instead of parallel_reduce to avoid
+  // exceeding CUDA L0 scratch memory limits (GlobalSum is 200*8=1600 bytes,
+  // but CUDA limits reducer scratch to ~512 bytes).
+  Kokkos::View<Real **> d_sum("vol_sums", nradii, nvol);
+  Kokkos::deep_copy(d_sum, 0.0);
+  Kokkos::parallel_for(
       "bhl_vol_integral", Kokkos::RangePolicy<>(DevExeSpace(), 0, nmkji),
-      KOKKOS_LAMBDA(const int &idx, array_sum::GlobalSum &mb_sum) {
+      KOKKOS_LAMBDA(const int &idx) {
         // compute m,k,j,i indices of thread and call function
         int m = (idx) / nkji;
         int k = (idx - m * nkji) / nji;
@@ -1410,8 +1415,8 @@ void BhlAccretionHistory(HistoryData *pdata, Mesh *pm) {
         // coordinate
         const Real r_ks = KSRX(x1v, x2v, x3v, bhl.spin);
 
-        // @YK : filter out masked volume and cells beyond the outer boundary
-        if (r_ks <= min_radius_all - 1e-10 || r_ks >= bhl.volume_integral_rmax)
+        // skip cells within the outer horizon
+        if (r_ks <= r_outer)
           return;
 
         // Below are copy from coordinate source terms (coordinates.cpp)
@@ -1518,62 +1523,60 @@ void BhlAccretionHistory(HistoryData *pdata, Mesh *pm) {
         const Real r2 = SQR(x1v) + SQR(x2v) + SQR(x3v);
         const Real one_over_r3 = 1.0 / (r2 * sqrt(r2));
 
-        // accumulate into each shell that contains this cell (sum into parallel
-        // reduce)
+        // accumulate into each shell that contains this cell
         for (int g = 0; g < nradii; ++g) {
-          if (r_ks > d_radii(g) - 1e-10) {
-            const int base = g * nvol;
-
+          if (r_ks < d_radii(g)) {
             // GR source terms
-            mb_sum.the_array[base + 0] += vol * s_1;
-            mb_sum.the_array[base + 1] += vol * s_2;
-            mb_sum.the_array[base + 2] += vol * s_3;
+            Kokkos::atomic_add(&d_sum(g, 0), vol * s_1);
+            Kokkos::atomic_add(&d_sum(g, 1), vol * s_2);
+            Kokkos::atomic_add(&d_sum(g, 2), vol * s_3);
 
-            mb_sum.the_array[base + 3] += vol * rho * x1v * one_over_r3;
-            mb_sum.the_array[base + 4] += vol * rho * x2v * one_over_r3;
-            mb_sum.the_array[base + 5] += vol * rho * x3v * one_over_r3;
+            Kokkos::atomic_add(&d_sum(g, 3), vol * rho * x1v * one_over_r3);
+            Kokkos::atomic_add(&d_sum(g, 4), vol * rho * x2v * one_over_r3);
+            Kokkos::atomic_add(&d_sum(g, 5), vol * rho * x3v * one_over_r3);
 
             // T^0_i
-            mb_sum.the_array[base + 6] += vol * (wtot * u0 * u_1 - b0 * b_1);
-            mb_sum.the_array[base + 7] += vol * (wtot * u0 * u_2 - b0 * b_2);
-            mb_sum.the_array[base + 8] += vol * (wtot * u0 * u_3 - b0 * b_3);
+            Kokkos::atomic_add(&d_sum(g, 6), vol * (wtot * u0 * u_1 - b0 * b_1));
+            Kokkos::atomic_add(&d_sum(g, 7), vol * (wtot * u0 * u_2 - b0 * b_2));
+            Kokkos::atomic_add(&d_sum(g, 8), vol * (wtot * u0 * u_3 - b0 * b_3));
 
             if (is_mhd) {
               // GR source terms (EM part only)
-              mb_sum.the_array[base + 9] += vol * sem_1;
-              mb_sum.the_array[base + 10] += vol * sem_2;
-              mb_sum.the_array[base + 11] += vol * sem_3;
+              Kokkos::atomic_add(&d_sum(g, 9),  vol * sem_1);
+              Kokkos::atomic_add(&d_sum(g, 10), vol * sem_2);
+              Kokkos::atomic_add(&d_sum(g, 11), vol * sem_3);
 
               // T^0_i (EM part only)
-              mb_sum.the_array[base + 12] += vol * (b_sq * u0 * u_1 - b0 * b_1);
-              mb_sum.the_array[base + 13] += vol * (b_sq * u0 * u_2 - b0 * b_2);
-              mb_sum.the_array[base + 14] += vol * (b_sq * u0 * u_3 - b0 * b_3);
+              Kokkos::atomic_add(&d_sum(g, 12), vol * (b_sq * u0 * u_1 - b0 * b_1));
+              Kokkos::atomic_add(&d_sum(g, 13), vol * (b_sq * u0 * u_2 - b0 * b_2));
+              Kokkos::atomic_add(&d_sum(g, 14), vol * (b_sq * u0 * u_3 - b0 * b_3));
             }
           }
         }
-      },
-      Kokkos::Sum<array_sum::GlobalSum>(sum_all));
+      });
   Kokkos::fence();
+
+  // copy results back to host
+  auto h_sum = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), d_sum);
 
   // store data into hdata array
   for (int g = 0; g < nradii; ++g) {
-    const int base = g * nvol;
-    pdata->hdata[nflux * g + 6] += sum_all.the_array[base + 0];
-    pdata->hdata[nflux * g + 7] += sum_all.the_array[base + 1];
-    pdata->hdata[nflux * g + 8] += sum_all.the_array[base + 2];
-    pdata->hdata[nflux * g + 9] += sum_all.the_array[base + 3];
-    pdata->hdata[nflux * g + 10] += sum_all.the_array[base + 4];
-    pdata->hdata[nflux * g + 11] += sum_all.the_array[base + 5];
-    pdata->hdata[nflux * g + 12] += sum_all.the_array[base + 6];
-    pdata->hdata[nflux * g + 13] += sum_all.the_array[base + 7];
-    pdata->hdata[nflux * g + 14] += sum_all.the_array[base + 8];
+    pdata->hdata[nflux * g + 6]  += h_sum(g, 0);
+    pdata->hdata[nflux * g + 7]  += h_sum(g, 1);
+    pdata->hdata[nflux * g + 8]  += h_sum(g, 2);
+    pdata->hdata[nflux * g + 9]  += h_sum(g, 3);
+    pdata->hdata[nflux * g + 10] += h_sum(g, 4);
+    pdata->hdata[nflux * g + 11] += h_sum(g, 5);
+    pdata->hdata[nflux * g + 12] += h_sum(g, 6);
+    pdata->hdata[nflux * g + 13] += h_sum(g, 7);
+    pdata->hdata[nflux * g + 14] += h_sum(g, 8);
     if (is_mhd) {
-      pdata->hdata[nflux * g + 21] += sum_all.the_array[base + 9];
-      pdata->hdata[nflux * g + 22] += sum_all.the_array[base + 10];
-      pdata->hdata[nflux * g + 23] += sum_all.the_array[base + 11];
-      pdata->hdata[nflux * g + 24] += sum_all.the_array[base + 12];
-      pdata->hdata[nflux * g + 25] += sum_all.the_array[base + 13];
-      pdata->hdata[nflux * g + 26] += sum_all.the_array[base + 14];
+      pdata->hdata[nflux * g + 21] += h_sum(g, 9);
+      pdata->hdata[nflux * g + 22] += h_sum(g, 10);
+      pdata->hdata[nflux * g + 23] += h_sum(g, 11);
+      pdata->hdata[nflux * g + 24] += h_sum(g, 12);
+      pdata->hdata[nflux * g + 25] += h_sum(g, 13);
+      pdata->hdata[nflux * g + 26] += h_sum(g, 14);
     }
   }
 
