@@ -6,20 +6,20 @@ basename  = recoiled_disk        # problem ID: basename of output filenames
 nghost    = 2           # Number of ghost cells
 
 nx1       = 128
-x1min     = -3.0
-x1max     = 3.0
+x1min     = -2.0
+x1max     = 2.0
 ix1_bc    = outflow
 ox1_bc    = outflow
 
 nx2       = 128
-x2min     = -3.0
-x2max     = 3.0
+x2min     = -2.0
+x2max     = 2.0
 ix2_bc    = outflow
 ox2_bc    = outflow
 
-nx3       = 64
-x3min     = -1.5
-x3max     = 1.5
+nx3       = 128
+x3min     = -2.0
+x3max     = 2.0
 ix3_bc    = outflow
 ox3_bc    = outflow
 
@@ -44,7 +44,7 @@ nx3       = 16
 evolution  = dynamic     # dynamic/kinematic/static
 integrator = rk3         # time integration algorithm
 cfl_number = 0.4         # The Courant, Friedrichs, & Lewy (CFL) Number
-nlim       = 1          # cycle limit
+nlim       = 0          # cycle limit
 tlim       = 2.0         # time limit
 ndiag      = 100         # cycles between diagostic output
 
@@ -56,21 +56,35 @@ gamma           = 1.4    # gamma = C_p/C_v
 dfloor      = 1.0e-8     # floor on density rho
 pfloor      = 0.333e-10  # floor on gas pressure p_gas
 
+########################################################################
 <hydro_srcterms>
 point_particle_gravity_at_center = true
+gravity_softening_length = 0.1
 
 <problem>
-r_cavity = 0.5
-r_out = 2.0
-truncation_length_out = 0.2
-power_exponent_p = 0.0
-delta0 = 1.0e-5
+r_in  = 0.5
+a_in  = 0.05
+r_out = 6.0
+a_out = 0.2
 
-scale_height = 0.1
+exponent_p = 0.0
+
+constant_scale_height = true
+scale_height_parameter = 0.1  # if `true` this is H. if `false`, this is h = H/R
+
+density_floor = 1.0e-8
+
+add_kick = true
+kick_magnitude = 1.0
+kick_angle = 0.52359877559  # 30deg
+
+user_hist = true      # enroll user-defined history function
+
+########################################################################
 
 <output1>
 file_type  = hst         # History data dump
-dt         = 0.01        # time increment between outputs
+dcycle     = 1        # time increment between outputs
 
 <output2>
 file_type  = bin        # Binary data dump
