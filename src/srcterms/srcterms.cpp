@@ -130,9 +130,30 @@ void SourceTerms::PointParticleGravity(const DvceArray5D<Real> &w0,
 
   auto &size = pmy_pack->pmb->mb_size;
 
+  // Point-mass gravity with cubic-spline (Gadget) softening. The per-cell
+  // force factor is the analytic gradient of the softened potential kernel
+  // divided by radius (a = softened_force_factor * x). All radius-independent
+  // coefficients depend only on the softening length h, so precompute them
+  // here, outside the kernel.
   const Real h = softening_length;
-  const Real h_over_2 = 0.5 * softening_length;
-  const Real one_over_h = 1.0 / softening_length;
+  const Real h_over_2 = 0.5 * h;
+
+  const Real one_over_h = 1.0 / h;
+  const Real one_over_h3 = one_over_h * one_over_h * one_over_h;
+  const Real one_over_h4 = one_over_h3 * one_over_h;
+  const Real one_over_h5 = one_over_h4 * one_over_h;
+  const Real one_over_h6 = one_over_h5 * one_over_h;
+
+  // r < h/2 :  a1_0 + a1_2 r^2 + a1_3 r^3
+  const Real a1_0 = -(32. / 3) * one_over_h3;
+  const Real a1_2 = (192. / 5) * one_over_h5;
+  const Real a1_3 = -32. * one_over_h6;
+
+  // h/2 <= r < h :  (1/15)/r^3 + b2_0 + b2_1 r + b2_2 r^2 + b2_3 r^3
+  const Real b2_0 = -(64. / 3) * one_over_h3;
+  const Real b2_1 = 48. * one_over_h4;
+  const Real b2_2 = -(192. / 5) * one_over_h5;
+  const Real b2_3 = (32. / 3) * one_over_h6;
 
   par_for(
       "point_particle_gravity", DevExeSpace(), 0, nmb1, ks, ke, js, je, is, ie,
@@ -151,35 +172,27 @@ void SourceTerms::PointParticleGravity(const DvceArray5D<Real> &w0,
 
         const Real radius = std::sqrt(x1v * x1v + x2v * x2v + x3v * x3v);
 
-        Real softened_one_over_r;
+        Real softened_force_factor;
 
         if (radius >= h) {
-          softened_one_over_r = 1.0 / radius;
+          const Real inv_r = 1.0 / radius;
+          softened_force_factor = -inv_r * inv_r * inv_r;
+        } else if (radius < h_over_2) {
+          // Horner: a1_0 + r^2 (a1_2 + a1_3 r)
+          const Real r2 = radius * radius;
+          softened_force_factor = a1_0 + r2 * (a1_2 + a1_3 * radius);
         } else {
-          const Real u = radius * one_over_h;
-          const Real u2 = SQR(u);
-
-          // Horner's method for polynomial evaluation
-          if (radius < h_over_2) {
-            softened_one_over_r =
-                one_over_h *
-                (2.8 + u2 * (-5.333333333333333 + u2 * (9.6 - 6.4 * u)));
-          } else {
-            softened_one_over_r =
-                (-0.06666666666666667 +
-                 u * (3.2 + u2 * (-10.666666666666666 +
-                                  u * (16.0 +
-                                       u * (-9.6 + 2.1333333333333333 * u))))) /
-                radius;
-          }
+          // Horner: (1/15)/r^3 + b2_0 + r (b2_1 + r (b2_2 + b2_3 r))
+          const Real inv_r = 1.0 / radius;
+          const Real inv_r3 = inv_r * inv_r * inv_r;
+          softened_force_factor =
+              (1. / 15) * inv_r3 +
+              b2_0 + radius * (b2_1 + radius * (b2_2 + b2_3 * radius));
         }
-
-        const Real softened_inv_r3 =
-            softened_one_over_r * softened_one_over_r * softened_one_over_r;
 
         // Pre-calculate source multipliers to eliminate redundant array
         // reads/math
-        const Real dt_src = -bdt * softened_inv_r3;
+        const Real dt_src = bdt * softened_force_factor;
 
         // Update Conserved Variables
         u0(m, IEN, k, j, i) +=
