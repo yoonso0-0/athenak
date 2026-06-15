@@ -44,7 +44,6 @@ struct recoiled_disk_pgen {
 
   //
   Real gravity_softening_length;
-  Real density_floor;
 
   //
   bool add_kick;
@@ -123,13 +122,12 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
   recoiled_disk.gravity_softening_length =
       pin->GetReal("hydro_srcterms", "gravity_softening_length");
 
-  recoiled_disk.density_floor = pin->GetReal("problem", "density_floor");
-
   recoiled_disk.add_kick = pin->GetBoolean("problem", "add_kick");
   recoiled_disk.kick_magnitude = pin->GetReal("problem", "kick_magnitude");
   recoiled_disk.kick_angle = pin->GetReal("problem", "kick_angle");
 
   auto pfloor = pin->GetReal("hydro", "pfloor");
+  auto dfloor = pin->GetReal("hydro", "dfloor");
 
   // capture variables for kernel
   auto &indcs = pmy_mesh_->mb_indcs;
@@ -238,10 +236,10 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
 
         if (rec_disk.add_kick) {
           vx -= rec_disk.kick_magnitude * cos(rec_disk.kick_angle);
-          vz = -rec_disk.kick_magnitude * sin(rec_disk.kick_angle);
+          vz -= rec_disk.kick_magnitude * sin(rec_disk.kick_angle);
         }
 
-        if (dens > rec_disk.density_floor) {
+        if (dens > dfloor) {
 
           u0_(m, IDN, k, j, i) = dens;
           u0_(m, IM1, k, j, i) = dens * vx;
@@ -251,11 +249,18 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
           u0_(m, IEN, k, j, i) =
               pressure / gm1 + 0.5 * dens * (SQR(vx) + SQR(vy) + SQR(vz));
         } else {
-          u0_(m, IDN, k, j, i) = rec_disk.density_floor;
-          u0_(m, IM1, k, j, i) = 0;
-          u0_(m, IM2, k, j, i) = 0;
-          u0_(m, IM3, k, j, i) = 0;
-          u0_(m, IEN, k, j, i) = pfloor / gm1;
+          // Floor the density and pressure, but keep the same velocity field as
+          // the disk cells so the velocity is continuous across the floor
+          // boundary (ambient gas is at rest in the galaxy frame -> drifts at
+          // -v_kick in the recoiled-BH frame). The kinetic term must be
+          // included in IEN so ConsToPrim recovers pfloor instead of a negative
+          // internal energy.
+          u0_(m, IDN, k, j, i) = dfloor;
+          u0_(m, IM1, k, j, i) = dfloor * vx;
+          u0_(m, IM2, k, j, i) = dfloor * vy;
+          u0_(m, IM3, k, j, i) = dfloor * vz;
+          u0_(m, IEN, k, j, i) =
+              pfloor / gm1 + 0.5 * dfloor * (SQR(vx) + SQR(vy) + SQR(vz));
         }
 
         // reduction: track minimum cell spacing per axis across all blocks

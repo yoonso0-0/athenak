@@ -72,8 +72,6 @@ exponent_p = 0.0
 constant_scale_height = true
 scale_height_parameter = 0.1  # if `true` this is H. if `false`, this is h = H/R
 
-density_floor = 1.0e-8
-
 add_kick = true
 kick_magnitude = 1.0
 kick_angle = 0.52359877559  # 30deg
