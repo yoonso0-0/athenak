@@ -29,20 +29,11 @@
 
 namespace {
 
-struct recoiled_disk_pgen {
-  // surface density profile
-  Real r_in;
-  Real r_out;
-  Real a_in;
-  Real a_out;
-  Real exponent_p;
+struct disk_collision_pgen {
+  Real scale_height;
+  Real pressure;
+  Real disk_initial_z;
 
-  //
-  bool constant_scale_height;
-  Real scale_height_parameter;
-  bool add_rotation_corrections;
-
-  //
   Real gravity_softening_length;
 
   //
@@ -51,13 +42,13 @@ struct recoiled_disk_pgen {
   Real kick_angle;
 };
 
-recoiled_disk_pgen recoiled_disk;
+disk_collision_pgen disk_collision;
 
 } // namespace
 
 // Prototypes for user-defined BCs and history functions
 void HydroNoInflow(Mesh *pm);
-void RecoiledDiskHistory(HistoryData *pdata, Mesh *pm);
+void DiskCollisionHistory(HistoryData *pdata, Mesh *pm);
 
 KOKKOS_INLINE_FUNCTION
 Real compute_softened_inv_r(const Real radius, const Real h,
@@ -87,7 +78,7 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
   // user_bcs_func = HydroNoInflow;
 
   //
-  user_hist_func = RecoiledDiskHistory;
+  user_hist_func = DiskCollisionHistory;
 
   // return if restart
   if (restart)
@@ -106,25 +97,16 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
     gm1 = (pmbp->pmhd->peos->eos_data.gamma) - 1.0;
   }
 
-  recoiled_disk.r_in = pin->GetReal("problem", "r_in");
-  recoiled_disk.r_out = pin->GetReal("problem", "r_out");
-  recoiled_disk.a_in = pin->GetReal("problem", "a_in");
-  recoiled_disk.a_out = pin->GetReal("problem", "a_out");
-  recoiled_disk.exponent_p = pin->GetReal("problem", "exponent_p");
+  disk_collision.scale_height = pin->GetReal("problem", "scale_height");
+  disk_collision.pressure = pin->GetReal("problem", "pressure");
+  disk_collision.disk_initial_z = pin->GetOrAddReal("problem", "disk_initial_z", 0.0);
 
-  recoiled_disk.constant_scale_height =
-      pin->GetBoolean("problem", "constant_scale_height");
-  recoiled_disk.scale_height_parameter =
-      pin->GetReal("problem", "scale_height_parameter");
-  recoiled_disk.add_rotation_corrections =
-      pin->GetBoolean("problem", "add_rotation_corrections");
-
-  recoiled_disk.gravity_softening_length =
+  disk_collision.gravity_softening_length =
       pin->GetReal("hydro_srcterms", "gravity_softening_length");
 
-  recoiled_disk.add_kick = pin->GetBoolean("problem", "add_kick");
-  recoiled_disk.kick_magnitude = pin->GetReal("problem", "kick_magnitude");
-  recoiled_disk.kick_angle = pin->GetReal("problem", "kick_angle");
+  disk_collision.add_kick = pin->GetBoolean("problem", "add_kick");
+  disk_collision.kick_magnitude = pin->GetReal("problem", "kick_magnitude");
+  disk_collision.kick_angle = pin->GetReal("problem", "kick_angle");
 
   auto pfloor = pin->GetReal("hydro", "pfloor");
   auto dfloor = pin->GetReal("hydro", "dfloor");
@@ -144,10 +126,9 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
   const int nji = indcs.nx2 * indcs.nx1;
 
   //
-  auto rec_disk = recoiled_disk;
+  auto disk_ic = disk_collision;
 
-  const Real h = rec_disk.gravity_softening_length;
-  const Real one_over_h = 1.0 / h;
+  const Real h = disk_ic.gravity_softening_length;
 
   Real min_dx1, min_dx2, min_dx3;
   Kokkos::parallel_reduce(
@@ -161,82 +142,20 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
         k += ks;
         j += js;
 
-        const Real x1v = CellCenterX(i - is, indcs.nx1, size.d_view(m).x1min,
-                                     size.d_view(m).x1max);
-        const Real x2v = CellCenterX(j - js, indcs.nx2, size.d_view(m).x2min,
-                                     size.d_view(m).x2max);
         const Real x3v = CellCenterX(k - ks, indcs.nx3, size.d_view(m).x3min,
                                      size.d_view(m).x3max);
 
-        // cylindrical radius
-        const Real r_cylindrical = std::sqrt(x1v * x1v + x2v * x2v);
-        // const Real r_spherical = std::sqrt(x1v * x1v + x2v * x2v + x3v *
-        // x3v);
+        const Real H = disk_ic.scale_height;
+        const Real z = x3v - disk_ic.disk_initial_z;
 
-        // soften (regularize) the radius near r=0
-        const Real inv_softened_r_cylindrical =
-            compute_softened_inv_r(r_cylindrical, h, one_over_h);
-        const Real softened_r_cylindrical = 1.0 / inv_softened_r_cylindrical;
+        const Real dens = exp(-0.5 * SQR(z / H));
+        const Real pressure = disk_ic.pressure;
 
-        // compute surface density profile
-        Real Sigma = pow(softened_r_cylindrical, rec_disk.exponent_p);
+        Real vx = 0.0, vy = 0.0, vz = 0.0;
 
-        // Define alias variables
-        const Real R = softened_r_cylindrical;
-        const Real one_over_R = inv_softened_r_cylindrical;
-        const Real r_in = rec_disk.r_in;
-        const Real r_out = rec_disk.r_out;
-        const Real a_in = rec_disk.a_in;
-        const Real a_out = rec_disk.a_out;
-
-        // apply inner and outer truncation
-        const Real f_in = 1.0 / (1.0 + exp(-(R - r_in) / a_in));
-        const Real f_out = 1.0 / (1.0 + exp(+(R - r_out) / a_out));
-        Sigma *= f_in * f_out;
-
-        const Real dLogSigma_dLogR = rec_disk.exponent_p +
-                                     (R / a_in) * (1.0 - f_in) -
-                                     (R / a_out) * (1.0 - f_out);
-
-        Real aspect_ratio, H;
-        if (rec_disk.constant_scale_height) {
-          H = rec_disk.scale_height_parameter;
-          aspect_ratio = H / R;
-        } else {
-          aspect_ratio = rec_disk.scale_height_parameter;
-          H = aspect_ratio * R;
-        }
-
-        const Real dens =
-            Sigma * exp(-0.5 * SQR(x3v / H)) / (H * sqrt(2.0 * M_PI));
-        const Real sound_speed_squared =
-            inv_softened_r_cylindrical * SQR(H * inv_softened_r_cylindrical);
-        const Real pressure = dens * sound_speed_squared;
-
-        // rotation profile
-        Real vphi_squared =
-            inv_softened_r_cylindrical; // leading order (Keplerian rotation)
-        if (rec_disk.add_rotation_corrections) {
-          vphi_squared += -1.5 * SQR(x3v * inv_softened_r_cylindrical) *
-                          inv_softened_r_cylindrical;
-          if (rec_disk.constant_scale_height) {
-            vphi_squared += sound_speed_squared * (-3.0 + dLogSigma_dLogR);
-          } else {
-            vphi_squared +=
-                sound_speed_squared * (-2.0 + SQR(x3v / H) + dLogSigma_dLogR);
-          }
-        }
-        // const Real vphi = sqrt(vphi_squared);
-        const Real vphi = sqrt(fmax(0.0, vphi_squared));
-
-        Real vx, vy, vz;
-        vx = -vphi * x2v * inv_softened_r_cylindrical;
-        vy = vphi * x1v * inv_softened_r_cylindrical;
-        vz = 0.0;
-
-        if (rec_disk.add_kick) {
-          vx -= rec_disk.kick_magnitude * cos(rec_disk.kick_angle);
-          vz -= rec_disk.kick_magnitude * sin(rec_disk.kick_angle);
+        if (disk_ic.add_kick) {
+          vx -= disk_ic.kick_magnitude * cos(disk_ic.kick_angle);
+          vz -= disk_ic.kick_magnitude * sin(disk_ic.kick_angle);
         }
 
         if (dens > dfloor) {
@@ -249,18 +168,15 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
           u0_(m, IEN, k, j, i) =
               pressure / gm1 + 0.5 * dens * (SQR(vx) + SQR(vy) + SQR(vz));
         } else {
-          // Floor the density and pressure, but keep the same velocity field as
-          // the disk cells so the velocity is continuous across the floor
-          // boundary (ambient gas is at rest in the galaxy frame -> drifts at
-          // -v_kick in the recoiled-BH frame). The kinetic term must be
-          // included in IEN so ConsToPrim recovers pfloor instead of a negative
-          // internal energy.
+          // Ambient gas at the density floor. Use the same pressure as the disk
+          // so there is no pressure jump at the slab edge (uniform pressure
+          // throughout the box keeps the slab in equilibrium in free space).
           u0_(m, IDN, k, j, i) = dfloor;
           u0_(m, IM1, k, j, i) = dfloor * vx;
           u0_(m, IM2, k, j, i) = dfloor * vy;
           u0_(m, IM3, k, j, i) = dfloor * vz;
           u0_(m, IEN, k, j, i) =
-              pfloor / gm1 + 0.5 * dfloor * (SQR(vx) + SQR(vy) + SQR(vz));
+              pressure / gm1 + 0.5 * dfloor * (SQR(vx) + SQR(vy) + SQR(vz));
         }
 
         // reduction: track minimum cell spacing per axis across all blocks
@@ -319,7 +235,7 @@ Real compute_softened_inv_r(const Real radius, const Real h,
 //
 // @YK: History variables
 //
-void RecoiledDiskHistory(HistoryData *pdata, Mesh *pm) {
+void DiskCollisionHistory(HistoryData *pdata, Mesh *pm) {
   // MeshBlockPack *pmbp = pm->pmb_pack;
 
   pdata->nhist = 7;
@@ -349,8 +265,8 @@ void RecoiledDiskHistory(HistoryData *pdata, Mesh *pm) {
   auto &size = pm->pmb_pack->pmb->mb_size;
   int &nhist_ = pdata->nhist;
 
-  auto rec_disk = recoiled_disk;
-  const Real h = rec_disk.gravity_softening_length;
+  auto disk_ic = disk_collision;
+  const Real h = disk_ic.gravity_softening_length;
   const Real one_over_h = 1.0 / h;
 
   array_sum::GlobalSum sum_this_mb;
