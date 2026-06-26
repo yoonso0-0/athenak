@@ -322,14 +322,22 @@ Real compute_softened_inv_r(const Real radius, const Real h,
 void RecoiledDiskHistory(HistoryData *pdata, Mesh *pm) {
   // MeshBlockPack *pmbp = pm->pmb_pack;
 
-  pdata->nhist = 7;
+  pdata->nhist = 14;
   pdata->label[0] = "M";
   pdata->label[1] = "Lx";
   pdata->label[2] = "Ly";
   pdata->label[3] = "Lz";
   pdata->label[4] = "Eint";
-  pdata->label[5] = "KE";
-  pdata->label[6] = "PE";
+  pdata->label[5] = "Mb_coll";  // bound mass, collisionless criterion
+  pdata->label[6] = "Mb_hydro"; // bound mass, Bernoulli criterion
+  // bound-only quantities (Bernoulli criterion, same as Mb_hydro)
+  pdata->label[7] = "Lx_b";
+  pdata->label[8] = "Ly_b";
+  pdata->label[9] = "Lz_b";
+  pdata->label[10] = "Eint_b";
+  pdata->label[11] = "M_rsoft";  // mass within softening radius
+  pdata->label[12] = "KE";
+  pdata->label[13] = "PE";
 
   // loop over all MeshBlocks in this pack
   auto &indcs = pm->pmb_pack->pmesh->mb_indcs;
@@ -352,6 +360,7 @@ void RecoiledDiskHistory(HistoryData *pdata, Mesh *pm) {
   auto rec_disk = recoiled_disk;
   const Real h = rec_disk.gravity_softening_length;
   const Real one_over_h = 1.0 / h;
+  const Real eos_gamma = pm->pmb_pack->phydro->peos->eos_data.gamma;
 
   array_sum::GlobalSum sum_this_mb;
 
@@ -366,7 +375,8 @@ void RecoiledDiskHistory(HistoryData *pdata, Mesh *pm) {
         k += ks;
         j += js;
 
-        Real vol = size.d_view(m).dx1 * size.d_view(m).dx2 * size.d_view(m).dx3;
+        const Real vol =
+            size.d_view(m).dx1 * size.d_view(m).dx2 * size.d_view(m).dx3;
 
         Real &x1min = size.d_view(m).x1min;
         Real &x1max = size.d_view(m).x1max;
@@ -380,12 +390,25 @@ void RecoiledDiskHistory(HistoryData *pdata, Mesh *pm) {
         Real &x3max = size.d_view(m).x3max;
         const Real x3v = CellCenterX(k - ks, indcs.nx3, x3min, x3max);
 
+        // cell quantities reused across the diagnostics below
+        const Real dens = u0_(m, IDN, k, j, i);
+        const Real cell_mass = vol * dens;
+        const Real eint = w0_(m, IEN, k, j, i); // internal energy density
+        const Real v2 = SQR(w0_(m, IVX, k, j, i)) + SQR(w0_(m, IVY, k, j, i)) +
+                        SQR(w0_(m, IVZ, k, j, i));
+
+        // spherical radius, softened 1/r, and potential per unit mass (GM = 1)
+        const Real radius = std::sqrt(x1v * x1v + x2v * x2v + x3v * x3v);
+        const Real softened_inv_r =
+            compute_softened_inv_r(radius, h, one_over_h);
+        const Real phi = -softened_inv_r;
+
         array_sum::GlobalSum hvars;
 
         // total mass
-        hvars.the_array[0] = vol * u0_(m, IDN, k, j, i);
+        hvars.the_array[0] = cell_mass;
 
-        // total angular momentum
+        // total angular momentum (r x momentum)
         const Real px = u0_(m, IM1, k, j, i);
         const Real py = u0_(m, IM2, k, j, i);
         const Real pz = u0_(m, IM3, k, j, i);
@@ -394,19 +417,35 @@ void RecoiledDiskHistory(HistoryData *pdata, Mesh *pm) {
         hvars.the_array[3] = vol * (x1v * py - x2v * px);
 
         // total internal energy
-        hvars.the_array[4] = vol * w0_(m, IEN, k, j, i);
+        hvars.the_array[4] = vol * eint;
+
+        // bound-mass criteria (specific energy <= 0):
+        //   collisionless (geodesic):  0.5 v^2 + Phi
+        //   hydrodynamic (Bernoulli):  0.5 v^2 + (eint + P)/rho + Phi, with
+        //     P = (gamma-1) eint  =>  enthalpy (eint + P)/rho = gamma eint / rho
+        const Real e_coll = 0.5 * v2 + phi;
+        const Real e_hydro = e_coll + eos_gamma * eint / dens;
+        const bool bound_coll = (e_coll <= 0.0);
+        const bool bound_hydro = (e_hydro <= 0.0);
+
+        hvars.the_array[5] = bound_coll ? cell_mass : 0.0;
+        hvars.the_array[6] = bound_hydro ? cell_mass : 0.0;
+
+        // angular momentum and internal energy of bound material only
+        // (Bernoulli criterion, identical to Mb_hydro)
+        hvars.the_array[7] = bound_hydro ? hvars.the_array[1] : 0.0; // Lx_b
+        hvars.the_array[8] = bound_hydro ? hvars.the_array[2] : 0.0; // Ly_b
+        hvars.the_array[9] = bound_hydro ? hvars.the_array[3] : 0.0; // Lz_b
+        hvars.the_array[10] = bound_hydro ? hvars.the_array[4] : 0.0; // Eint_b
+
+        // mass contained within the gravitational softening radius (r <= h)
+        hvars.the_array[11] = (radius <= h) ? cell_mass : 0.0;
 
         // total kinetic energy
-        hvars.the_array[5] =
-            0.5 * vol * u0_(m, IDN, k, j, i) *
-            (SQR(w0_(m, IVX, k, j, i)) + SQR(w0_(m, IVY, k, j, i)) +
-             SQR(w0_(m, IVZ, k, j, i)));
+        hvars.the_array[12] = 0.5 * cell_mass * v2;
 
         // total gravitational potential energy
-        const Real radius = std::sqrt(x1v * x1v + x2v * x2v + x3v * x3v);
-        const Real softened_inv_r =
-            compute_softened_inv_r(radius, h, one_over_h);
-        hvars.the_array[6] = -vol * u0_(m, IDN, k, j, i) * softened_inv_r;
+        hvars.the_array[13] = cell_mass * phi;
 
         // fill rest of the_array with zeros, if nhist < NHISTORY_VARIABLES
         for (int n = nhist_; n < NHISTORY_VARIABLES; ++n) {
