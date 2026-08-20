@@ -27,7 +27,12 @@
 #include "athena.hpp"
 
 // identifiers for refinement criteria methods
-enum class RefCritMethod {min_max, slope, second_deriv, location, user};
+enum class RefCritMethod {min_max, slope, second_deriv, location, spectral_norm, user};
+
+enum class error_policy_for_multi_dim {
+  max,
+  sum,
+};
 
 using DvceArray5DnSlice = Kokkos::Subview<DvceArray5D<Real>,
                           std::remove_const_t<decltype(Kokkos::ALL)>,
@@ -47,6 +52,19 @@ struct RefCritData {
   Real rloc_x1, rloc_x2, rloc_x3;  // x1-,x2-,x3-locations of point to refine around
   Real rloc_rad;                   // radius of region around point to be refined
   DvceArray5DnSlice rdata;         // slice of variable "n" in 5D array(m,n,k,j,i)
+
+  // @yk : parameters used for Spectral norm criteria.  These are only read from the
+  // input file when method=spectral_norm, so they carry defaults to stay well-defined
+  // for every other method.
+  error_policy_for_multi_dim spectral_norm_error_policy = error_policy_for_multi_dim::max;
+  Real spectral_norm_alpha_refine = 0.0;
+  Real spectral_norm_alpha_coarsen = 0.0;
+  Real dfloor = -(FLT_MAX);
+  bool monitor_momentum = false;
+  bool monitor_energy = false;
+  bool monitor_magnetic_field = false;
+  bool use_primitives = false;
+  int max_level = 0;
 };
 
 //----------------------------------------------------------------------------------------
@@ -69,6 +87,9 @@ class RefinementCriteria {
   void CheckSlope(MeshBlockPack* pmbp, RefCritData crit);
   void CheckSecondDeriv(MeshBlockPack* pmbp, RefCritData crit);
   void CheckLocation(MeshBlockPack* pmbp, RefCritData crit);
+
+  // @yk: new criteria
+  void CheckSpectralNorm(MeshBlockPack *pmbp, RefCritData crit);
 
  private:
   // data
