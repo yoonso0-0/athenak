@@ -42,17 +42,39 @@ void ProlongCC(const int m, const int v, const int k, const int j, const int i,
   }
 
   // interpolate to the finer grid
-  a(m,v,fk,fj,fi  ) = ca(m,v,k,j,i) - dvar1 - dvar2 - dvar3;
-  a(m,v,fk,fj,fi+1) = ca(m,v,k,j,i) + dvar1 - dvar2 - dvar3;
-  if (multi_d) {
-    a(m,v,fk,fj+1,fi  ) = ca(m,v,k,j,i) - dvar1 + dvar2 - dvar3;
-    a(m,v,fk,fj+1,fi+1) = ca(m,v,k,j,i) + dvar1 + dvar2 - dvar3;
-  }
   if (three_d) {
+    // 3D: direction-ordered accumulation is retained unchanged (see note in the 2D
+    // branch below; making 3D symmetric under the x1<->x2/x1<->x3/x2<->x3 transposes
+    // needs the same treatment for all three slope pairs and is not done here).
+    a(m,v,fk  ,fj  ,fi  ) = ca(m,v,k,j,i) - dvar1 - dvar2 - dvar3;
+    a(m,v,fk  ,fj  ,fi+1) = ca(m,v,k,j,i) + dvar1 - dvar2 - dvar3;
+    a(m,v,fk  ,fj+1,fi  ) = ca(m,v,k,j,i) - dvar1 + dvar2 - dvar3;
+    a(m,v,fk  ,fj+1,fi+1) = ca(m,v,k,j,i) + dvar1 + dvar2 - dvar3;
     a(m,v,fk+1,fj  ,fi  ) = ca(m,v,k,j,i) - dvar1 - dvar2 + dvar3;
     a(m,v,fk+1,fj  ,fi+1) = ca(m,v,k,j,i) + dvar1 - dvar2 + dvar3;
     a(m,v,fk+1,fj+1,fi  ) = ca(m,v,k,j,i) - dvar1 + dvar2 + dvar3;
     a(m,v,fk+1,fj+1,fi+1) = ca(m,v,k,j,i) + dvar1 + dvar2 + dvar3;
+  } else if (multi_d) {
+    // 2D: combine the x1- and x2-slopes into a single increment before applying it to
+    // the coarse value.  FP addition is commutative but NOT associative, so the plain
+    // left-to-right form ((ca - dvar1) - dvar2) is evaluated as ((ca - dvar2) - dvar1)
+    // in the x1<->x2 mirror-image cell (where the two slopes are interchanged), and the
+    // two differ by ~1 ulp.  Grouping the slopes first makes the mirror expression a
+    // pure commutation of this one, hence bitwise identical: dsum is invariant under
+    // the transpose, and ddif is exactly negated by it (IEEE negation is exact, and
+    // x + (a-b) == x - (b-a) bitwise for a != b).  This preserves everything the
+    // direction-ordered form preserved (the x1 and x2 axis reflections) and adds the
+    // x1=x2 diagonal.
+    Real dsum = dvar1 + dvar2;
+    Real ddif = dvar1 - dvar2;
+    a(m,v,fk,fj  ,fi  ) = ca(m,v,k,j,i) - dsum;
+    a(m,v,fk,fj  ,fi+1) = ca(m,v,k,j,i) + ddif;
+    a(m,v,fk,fj+1,fi  ) = ca(m,v,k,j,i) - ddif;
+    a(m,v,fk,fj+1,fi+1) = ca(m,v,k,j,i) + dsum;
+  } else {
+    // 1D
+    a(m,v,fk,fj,fi  ) = ca(m,v,k,j,i) - dvar1;
+    a(m,v,fk,fj,fi+1) = ca(m,v,k,j,i) + dvar1;
   }
   return;
 }
@@ -132,7 +154,7 @@ void ProlongFCSharedX2Face(const int m, const int k, const int j, const int i,
 KOKKOS_INLINE_FUNCTION
 void ProlongFCSharedX3Face(const int m, const int k, const int j, const int i,
                    const int fk, const int fj, const int fi,
-                   const bool multi_d,
+                   const bool multi_d, const bool three_d,
                    const DvceArray4D<Real> &cbx3f, const DvceArray4D<Real> &bx3f) {
   // Prolongate b.x3f (v=2) by interpolating in x1/x2
   Real dl = cbx3f(m,k,j,i  ) - cbx3f(m,k,j,i-1);
@@ -146,11 +168,23 @@ void ProlongFCSharedX3Face(const int m, const int k, const int j, const int i,
     dvar2 = 0.125*(SIGN(dl) + SIGN(dr))*fmin(fabs(dl), fabs(dr));
   }
 
-  bx3f(m,fk,fj  ,fi  ) = cbx3f(m,k,j,i) - dvar1 - dvar2;
-  bx3f(m,fk,fj  ,fi+1) = cbx3f(m,k,j,i) + dvar1 - dvar2;
-  if (multi_d) {
-    bx3f(m,fk,fj+1,fi  ) = cbx3f(m,k,j,i) - dvar1 + dvar2;
-    bx3f(m,fk,fj+1,fi+1) = cbx3f(m,k,j,i) + dvar1 + dvar2;
+  if (three_d || !multi_d) {
+    // 3D (and 1D): direction-ordered accumulation retained unchanged
+    bx3f(m,fk,fj  ,fi  ) = cbx3f(m,k,j,i) - dvar1 - dvar2;
+    bx3f(m,fk,fj  ,fi+1) = cbx3f(m,k,j,i) + dvar1 - dvar2;
+    if (multi_d) {
+      bx3f(m,fk,fj+1,fi  ) = cbx3f(m,k,j,i) - dvar1 + dvar2;
+      bx3f(m,fk,fj+1,fi+1) = cbx3f(m,k,j,i) + dvar1 + dvar2;
+    }
+  } else {
+    // 2D: group the x1- and x2-slopes so the expression is invariant under the x1<->x2
+    // transpose (which interchanges dvar1 and dvar2 and negates b.x3f).  See ProlongCC.
+    Real dsum = dvar1 + dvar2;
+    Real ddif = dvar1 - dvar2;
+    bx3f(m,fk,fj  ,fi  ) = cbx3f(m,k,j,i) - dsum;
+    bx3f(m,fk,fj  ,fi+1) = cbx3f(m,k,j,i) + ddif;
+    bx3f(m,fk,fj+1,fi  ) = cbx3f(m,k,j,i) - ddif;
+    bx3f(m,fk,fj+1,fi+1) = cbx3f(m,k,j,i) + dsum;
   }
   return;
 }
@@ -218,10 +252,16 @@ void ProlongFCInternal(const int m, const int fk, const int fj, const int fi,
 
   // Prolongate internal fields in 2D
   } else {
-    Real tmp1 = 0.25*(b.x2f(m,fk,fj+2,fi+1) - b.x2f(m,fk,fj,  fi+1)
-                    - b.x2f(m,fk,fj+2,fi  ) + b.x2f(m,fk,fj,  fi  ));
-    Real tmp2 = 0.25*(b.x1f(m,fk,fj,  fi  ) - b.x1f(m,fk,fj,  fi+2)
-                    - b.x1f(m,fk,fj+1,fi  ) + b.x1f(m,fk,fj+1,fi+2));
+    // Sum the two positive-signed corner terms and the two negative-signed corner
+    // terms separately before differencing.  The x1<->x2 transpose maps tmp1 onto
+    // -tmp2 term by term, but it permutes the terms within each group; grouping by
+    // sign makes that permutation a pure commutation of two-term sums, so tmp1 and
+    // tmp2 stay bitwise mirror images.  The left-to-right form
+    // (((a - b) - c) + d) is re-associated by the transpose and is not.
+    Real tmp1 = 0.25*((b.x2f(m,fk,fj+2,fi+1) + b.x2f(m,fk,fj,  fi  ))
+                    - (b.x2f(m,fk,fj,  fi+1) + b.x2f(m,fk,fj+2,fi  )));
+    Real tmp2 = 0.25*((b.x1f(m,fk,fj,  fi  ) + b.x1f(m,fk,fj+1,fi+2))
+                    - (b.x1f(m,fk,fj,  fi+2) + b.x1f(m,fk,fj+1,fi  )));
     b.x1f(m,fk,fj  ,fi+1) = 0.5*(b.x1f(m,fk,fj,  fi  ) + b.x1f(m,fk,fj,  fi+2)) + tmp1;
     b.x1f(m,fk,fj+1,fi+1) = 0.5*(b.x1f(m,fk,fj+1,fi  ) + b.x1f(m,fk,fj+1,fi+2)) + tmp1;
     b.x2f(m,fk,fj+1,fi  ) = 0.5*(b.x2f(m,fk,fj,  fi  ) + b.x2f(m,fk,fj+2,fi  )) + tmp2;
