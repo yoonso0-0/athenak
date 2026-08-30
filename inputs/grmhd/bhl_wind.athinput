@@ -1,0 +1,115 @@
+# AthenaK input file for magnetized Bondi-Hoyle-Lyttleton (BHL) wind accretion
+# onto a Kerr black hole in Cartesian Kerr-Schild coordinates.
+#
+# A uniform wind (rho_inf, v_inf, cs_inf) is injected through the outer-x1 face and
+# blows in the -x direction past the hole.  Build with
+#   cmake -S . -B build -DPROBLEM=fluids/wind_accretion
+#
+# Derived scales for the parameters below (G = M = c = 1):
+#   Mach number    M   = v_inf / cs_inf                  = 0.5
+#   accretion rad. R_a = 2 / (v_inf^2 + cs_inf^2)        = 160
+#   plasma beta    b   = p_inf / (0.5 b^2)               ~ 120
+
+<comment>
+problem   = BHL wind accretion onto a Kerr black hole
+reference = Bondi & Hoyle 1944, MNRAS 104 273; Lyttleton & Hoyle 1939
+
+<job>
+basename  = bhl
+
+<mesh>
+nghost = 4
+
+nx1    = 64
+x1min  = -128.0
+x1max  = 128.0
+ix1_bc = user
+ox1_bc = outflow
+
+nx2    = 64
+x2min  = -128.0
+x2max  = 128.0
+ix2_bc = outflow
+ox2_bc = outflow
+
+nx3    = 64
+x3min  = -128.0
+x3max  = 128.0
+ix3_bc = outflow
+ox3_bc = outflow
+
+<meshblock>
+nx1  = 1
+nx2  = 16
+nx3  = 16
+
+<mesh_refinement>
+refinement = static
+
+<refined_region0>
+level = 5
+x1min = -1e-4
+x1max = 1e-4
+x2min = -1e-4
+x2max = 1e-4
+x3min = -1e-4
+x3max = 1e-4
+
+<time>
+evolution  = dynamic
+integrator = rk2
+cfl_number = 0.3
+nlim       = -1
+tlim       = 4000.0
+ndiag      = 100
+
+<coord>
+general_rel = true
+a           = 0.9375
+excise      = true
+dexcise     = 1.0e-8
+pexcise     = 1.0e-11
+
+<mhd>
+eos         = ideal
+reconstruct = plm
+rsolver     = hlle
+dfloor      = 1.0e-10
+pfloor      = 1.0e-11
+gamma       = 1.6666666666666667
+fofc        = true
+gamma_max   = 20.0
+
+<problem>
+rho_inf    = 1.0
+v_inf      = 0.05
+cs_inf     = 0.1
+
+sigma_inf  = 1.0e-4
+magnetic_field_angle_yz = 0.0
+
+grav_drag_mask_rmax = 1e8
+user_hist  = true
+
+<output1>
+file_type  = hst
+dt         = 1.0
+user_hist_only = true
+
+<output2>
+file_type  = bin
+slice_x2   = 0.0
+id         = slice_x2
+variable   = hydro_w
+dt         = 10.0
+
+<output3>
+file_type  = bin
+slice_x3   = 0.0
+id         = slice_x3
+variable   = hydro_w
+dt         = 10.0
+
+<output5>
+file_type   = rst
+dt          = 1000.0
