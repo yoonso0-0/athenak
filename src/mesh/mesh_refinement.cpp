@@ -388,9 +388,15 @@ void MeshRefinement::UpdateMeshBlockTree(int &nnew, int &ndel) {
       }
     }
   }
-  // sort the lists by level
+  // Sort the list by level, deepest first.  MeshBlockTree::Derefine() vetoes a
+  // derefinement whose neighbour still owns a grandchild, and it reads the tree as
+  // earlier iterations of the loop below have already mutated it, so every deeper
+  // derefinement must be applied before any shallower one is tested.  The end iterator
+  // must therefore be &cllderef[ctnd], not &cllderef[ctnd-1]: the latter leaves the last
+  // entry out of the sort entirely (std::sort covers [first,last)), which can strand a
+  // deep entry behind shallower ones and spuriously veto them for one AMR step.
   if (ctnd > 1) {
-    std::sort(cllderef, &(cllderef[ctnd-1]), Mesh::GreaterLevel);
+    std::sort(cllderef, &(cllderef[ctnd]), Mesh::GreaterLevel);
   }
 
   // Now the lists of the blocks to be refined and derefined are completed
@@ -1156,7 +1162,7 @@ void MeshRefinement::RefineFC(DualArray1D<int> &n2o, DvceFaceFld4D<Real> &b,
       int fi = (i - cis)*2 + is;                   // fine i
       int fj = (multi_d)? ((j - cjs)*2 + js) : j;  // fine j
       int fk = (three_d)? ((k - cks)*2 + ks) : k;  // fine k
-      ProlongFCSharedX3Face(m,k,j,i,fk,fj,fi,multi_d,cb.x3f,b.x3f);
+      ProlongFCSharedX3Face(m,k,j,i,fk,fj,fi,multi_d,three_d,cb.x3f,b.x3f);
     }
   });
 
@@ -1254,8 +1260,15 @@ void MeshRefinement::RestrictCC(DvceArray5D<Real> &u, DvceArray5D<Real> &cu,
     KOKKOS_LAMBDA(const int m, const int n, const int j, const int i) {
       int finei = 2*i - cis;  // correct when cis=is
       int finej = 2*j - cjs;  // correct when cjs=js
-      cu(m,n,cks,j,i) = 0.25*(u(m,n,cks,finej  ,finei) + u(m,n,cks,finej  ,finei+1)
-                            + u(m,n,cks,finej+1,finei) + u(m,n,cks,finej+1,finei+1));
+      // Pair the two diagonal fine cells (finej,finei)+(finej+1,finei+1) together, and
+      // the two anti-diagonal fine cells (finej+1,finei)+(finej,finei+1) together,
+      // before combining.  Each pair is mapped onto itself by every element of the
+      // square's symmetry group -- both axis reflections AND the x1<->x2 diagonal
+      // transpose -- so a cell and its mirror image accumulate in bitwise-identical
+      // order.  The plain left-to-right sum (((A+C)+B)+D) transposes to (((A+B)+C)+D),
+      // a genuine re-association that seeds a ~1 ulp asymmetry at every restriction.
+      cu(m,n,cks,j,i) = 0.25*((u(m,n,cks,finej  ,finei) + u(m,n,cks,finej+1,finei+1))
+                            + (u(m,n,cks,finej+1,finei) + u(m,n,cks,finej  ,finei+1)));
     });
 
   // restrict in 3D
@@ -1338,9 +1351,10 @@ void MeshRefinement::RestrictFC(DvceFaceFld4D<Real> &b, DvceFaceFld4D<Real> &cb)
         cb.x2f(m,cks,j+1,i) =
           0.5*(b.x2f(m,cks,finej+2,finei) + b.x2f(m,cks,finej+2,finei+1));
       }
-      // restrict B3
-      Real b3coarse = 0.25*(b.x3f(m,cks,finej  ,finei) + b.x3f(m,cks,finej  ,finei+1)
-                          + b.x3f(m,cks,finej+1,finei) + b.x3f(m,cks,finej+1,finei+1));
+      // restrict B3.  Diagonal/anti-diagonal pairing preserves the x1<->x2 transpose
+      // as well as the axis reflections; see the 2D branch of RestrictCC above.
+      Real b3coarse = 0.25*((b.x3f(m,cks,finej  ,finei) + b.x3f(m,cks,finej+1,finei+1))
+                          + (b.x3f(m,cks,finej+1,finei) + b.x3f(m,cks,finej  ,finei+1)));
       cb.x3f(m,cks  ,j,i) = b3coarse;
       cb.x3f(m,cks+1,j,i) = b3coarse;
     });

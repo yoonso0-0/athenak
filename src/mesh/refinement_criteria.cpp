@@ -355,9 +355,17 @@ void RefinementCriteria::CheckSecondDeriv(MeshBlockPack* pmbp, RefCritData crit)
         int i = (idx - k*nji - j*nx1) + is;
         j += js;
         k += ks;
-        Real d2q = q0(m,k,j,i+1) - 2.0*q0(m,k,j,i) + q0(m,k,j,i-1);
-        if (multi_d) {d2q += (q0(m,k,j+1,i) - 2.0*q0(m,k,j,i) + q0(m,k,j-1,i));}
-        if (three_d) {d2q += (q0(m,k+1,j,i) - 2.0*q0(m,k,j,i) + q0(m,k-1,j,i));}
+        // Add the two mirror-image stencil points to each other before subtracting the
+        // centre term.  The stencil is palindromic but left-to-right summation is not:
+        // the x1-reflected cell evaluates ((q(i-1) - 2q(i)) + q(i+1)) where this cell
+        // evaluates ((q(i+1) - 2q(i)) + q(i-1)), which is a re-association, not a
+        // commutation, and the two can differ by far more than 1 ulp when the outer
+        // points nearly cancel the centre.  Pairing first makes the reflected cell a
+        // pure commutation of this one, hence bitwise identical.  Same trick as in
+        // CheckSpectralNorm::d4_error below.
+        Real d2q = (q0(m,k,j,i+1) + q0(m,k,j,i-1)) - 2.0*q0(m,k,j,i);
+        if (multi_d) {d2q += ((q0(m,k,j+1,i) + q0(m,k,j-1,i)) - 2.0*q0(m,k,j,i));}
+        if (three_d) {d2q += ((q0(m,k+1,j,i) + q0(m,k-1,j,i)) - 2.0*q0(m,k,j,i));}
         d2qmax = fmax((fabs(d2q)/q0(m,k,j,i)), d2qmax);
       },Kokkos::Max<Real>(team_d2qmax));
       // only derefine when flag has not been set by other criteria

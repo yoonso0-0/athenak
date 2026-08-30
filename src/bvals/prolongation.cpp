@@ -222,6 +222,7 @@ void ProlongFCSharedX3FaceOwned(const int m, const int nnghbr,
                                 const int fk, const int fj, const int fi,
                                 const int ox1, const int ox2, const int ox3,
                                 const int my_lev, const bool multi_d,
+                                const bool three_d,
                                 const RegionIndcs &indcs,
                                 const DualArray2D<NeighborBlock> &nghbr,
                                 const DvceArray4D<Real> &cbx3f,
@@ -237,15 +238,31 @@ void ProlongFCSharedX3FaceOwned(const int m, const int nnghbr,
     dvar2 = 0.125*(SIGN(dl) + SIGN(dr))*fmin(fabs(dl), fabs(dr));
   }
 
-  StoreProlongatedFCFace(m, nnghbr, 2, fk, fj, fi, ox1, ox2, ox3,
-                         my_lev, indcs, nghbr, cbx3f(m,k,j,i) - dvar1 - dvar2, bx3f);
-  StoreProlongatedFCFace(m, nnghbr, 2, fk, fj, fi+1, ox1, ox2, ox3,
-                         my_lev, indcs, nghbr, cbx3f(m,k,j,i) + dvar1 - dvar2, bx3f);
-  if (multi_d) {
+  if (three_d || !multi_d) {
+    // 3D (and 1D): direction-ordered accumulation retained unchanged
+    StoreProlongatedFCFace(m, nnghbr, 2, fk, fj, fi, ox1, ox2, ox3,
+                           my_lev, indcs, nghbr, cbx3f(m,k,j,i) - dvar1 - dvar2, bx3f);
+    StoreProlongatedFCFace(m, nnghbr, 2, fk, fj, fi+1, ox1, ox2, ox3,
+                           my_lev, indcs, nghbr, cbx3f(m,k,j,i) + dvar1 - dvar2, bx3f);
+    if (multi_d) {
+      StoreProlongatedFCFace(m, nnghbr, 2, fk, fj+1, fi, ox1, ox2, ox3,
+                             my_lev, indcs, nghbr, cbx3f(m,k,j,i) - dvar1 + dvar2, bx3f);
+      StoreProlongatedFCFace(m, nnghbr, 2, fk, fj+1, fi+1, ox1, ox2, ox3,
+                             my_lev, indcs, nghbr, cbx3f(m,k,j,i) + dvar1 + dvar2, bx3f);
+    }
+  } else {
+    // 2D: group the x1- and x2-slopes so the expression is invariant under the x1<->x2
+    // transpose.  See ProlongCC() in mesh/prolongation.hpp.
+    Real dsum = dvar1 + dvar2;
+    Real ddif = dvar1 - dvar2;
+    StoreProlongatedFCFace(m, nnghbr, 2, fk, fj, fi, ox1, ox2, ox3,
+                           my_lev, indcs, nghbr, cbx3f(m,k,j,i) - dsum, bx3f);
+    StoreProlongatedFCFace(m, nnghbr, 2, fk, fj, fi+1, ox1, ox2, ox3,
+                           my_lev, indcs, nghbr, cbx3f(m,k,j,i) + ddif, bx3f);
     StoreProlongatedFCFace(m, nnghbr, 2, fk, fj+1, fi, ox1, ox2, ox3,
-                           my_lev, indcs, nghbr, cbx3f(m,k,j,i) - dvar1 + dvar2, bx3f);
+                           my_lev, indcs, nghbr, cbx3f(m,k,j,i) - ddif, bx3f);
     StoreProlongatedFCFace(m, nnghbr, 2, fk, fj+1, fi+1, ox1, ox2, ox3,
-                           my_lev, indcs, nghbr, cbx3f(m,k,j,i) + dvar1 + dvar2, bx3f);
+                           my_lev, indcs, nghbr, cbx3f(m,k,j,i) + dsum, bx3f);
   }
 }
 
@@ -333,10 +350,13 @@ void ProlongFCInternalOwned(const int m, const int nnghbr, const int fk, const i
                            0.5*(b.x3f(m,fk+2,fj+1,fi+1) + b.x3f(m,fk,fj+1,fi+1))
                            + Wzz + Uxyz + Vxyz, b.x3f);
   } else {
-    Real tmp1 = 0.25*(b.x2f(m,fk,fj+2,fi+1) - b.x2f(m,fk,fj,  fi+1)
-                    - b.x2f(m,fk,fj+2,fi  ) + b.x2f(m,fk,fj,  fi  ));
-    Real tmp2 = 0.25*(b.x1f(m,fk,fj,  fi  ) - b.x1f(m,fk,fj,  fi+2)
-                    - b.x1f(m,fk,fj+1,fi  ) + b.x1f(m,fk,fj+1,fi+2));
+    // Sum the two positive-signed corner terms and the two negative-signed corner
+    // terms separately before differencing, so that the x1<->x2 transpose maps tmp1
+    // onto -tmp2 bitwise.  See ProlongFCInternal() in mesh/prolongation.hpp.
+    Real tmp1 = 0.25*((b.x2f(m,fk,fj+2,fi+1) + b.x2f(m,fk,fj,  fi  ))
+                    - (b.x2f(m,fk,fj,  fi+1) + b.x2f(m,fk,fj+2,fi  )));
+    Real tmp2 = 0.25*((b.x1f(m,fk,fj,  fi  ) + b.x1f(m,fk,fj+1,fi+2))
+                    - (b.x1f(m,fk,fj,  fi+2) + b.x1f(m,fk,fj+1,fi  )));
     StoreProlongatedFCFace(m, nnghbr, 0, fk, fj, fi+1, ox1, ox2, ox3, my_lev,
                            indcs, nghbr,
                            0.5*(b.x1f(m,fk,fj,fi) + b.x1f(m,fk,fj,fi+2)) + tmp1,
@@ -434,8 +454,12 @@ void MeshBoundaryValuesCC::FillCoarseInBndryCC(DvceArray5D<Real> &a,
 
           // restrict in 2D
           if (!(three_d)) {
-            ca(m,v,kl,j,i) = 0.25*(a(m,v,kl,finej  ,finei) + a(m,v,kl,finej  ,finei+1)
-                                 + a(m,v,kl,finej+1,finei) + a(m,v,kl,finej+1,finei+1));
+            // Pair the diagonal fine cells together and the anti-diagonal fine cells
+            // together before combining, so the sum is invariant under the x1<->x2
+            // transpose as well as the two axis reflections.  See the 2D branch of
+            // MeshRefinement::RestrictCC().
+            ca(m,v,kl,j,i) = 0.25*((a(m,v,kl,finej  ,finei) + a(m,v,kl,finej+1,finei+1))
+                                 + (a(m,v,kl,finej+1,finei) + a(m,v,kl,finej  ,finei+1)));
           // restrict in 3D
           } else {
             if (!is_z4c) {
@@ -618,8 +642,9 @@ void MeshBoundaryValuesFC::FillCoarseInBndryFC(DvceFaceFld4D<Real> &b,
             } else if (v==1) {
               cb.x2f(m,kl,j,i) = 0.5*(b.x2f(m,kl,fj,fi) + b.x2f(m,kl,fj,fi+1));
             } else {
-              Real b3c = 0.25*(b.x3f(m,kl,fj  ,fi) + b.x3f(m,kl,fj  ,fi+1)
-                             + b.x3f(m,kl,fj+1,fi) + b.x3f(m,kl,fj+1,fi+1));
+              // diagonal/anti-diagonal pairing; see MeshRefinement::RestrictCC()
+              Real b3c = 0.25*((b.x3f(m,kl,fj  ,fi) + b.x3f(m,kl,fj+1,fi+1))
+                             + (b.x3f(m,kl,fj+1,fi) + b.x3f(m,kl,fj  ,fi+1)));
               cb.x3f(m,kl  ,j,i) = b3c;
               cb.x3f(m,kl+1,j,i) = b3c;
             }
@@ -713,7 +738,7 @@ void MeshBoundaryValuesFC::ProlongateFC(DvceFaceFld4D<Real> &b, DvceFaceFld4D<Re
                                      three_d,indcs,nghbr,cb.x2f,b.x2f);
         } else {
           ProlongFCSharedX3FaceOwned(m,nnghbr,k,j,i,fk,fj,fi,ox1,ox2,ox3,my_lev,
-                                     multi_d,indcs,nghbr,cb.x3f,b.x3f);
+                                     multi_d,three_d,indcs,nghbr,cb.x3f,b.x3f);
         }
       });
     }
