@@ -38,6 +38,7 @@ class SourceTerms {
 
   // @YK
   bool point_particle_gravity_at_center;
+  bool gas_removing_sink;
 
   // new timestep
   Real dtnew;
@@ -62,6 +63,14 @@ class SourceTerms {
   // @YK: data for point-particle gravity
   Real softening_length;
 
+  // @YK: data for the gas-removing sink at the coordinate origin
+  Real sink_radius;    // r_s, characteristic radius of the removal kernel
+  Real sink_rate;      // gamma, removal rate in units of Omega_K(r_s)
+  int sink_kernel_b;   // b in s = exp(-(r/r_s)^b), always an integer
+  // derived from the above in the constructor
+  Real sink_removal_rate;  // gamma * Omega_K(r_s), the actual removal rate
+  Real sink_r_cut;         // radius beyond which the kernel underflows to zero
+
   // functions
   void ApplySrcTerms(const DvceArray5D<Real> &w0, const EOS_Data &eos,
                      const Real bdt, DvceArray5D<Real> &u0);
@@ -79,6 +88,8 @@ class SourceTerms {
 
   void PointParticleGravity(const DvceArray5D<Real> &w0, const EOS_Data &eos,
                             const Real bdt, DvceArray5D<Real> &u0);
+  void GasRemovingSink(const DvceArray5D<Real> &w0, const EOS_Data &eos,
+                       const Real bdt, DvceArray5D<Real> &u0);
 
 private:
   MeshBlockPack *pmy_pack;

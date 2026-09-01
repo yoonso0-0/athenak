@@ -61,6 +61,17 @@ pfloor      = 0.333e-10  # floor on gas pressure p_gas
 point_particle_gravity_at_center = true
 gravity_softening_length = 0.1
 
+# Torque-free gas-removing sink at the origin (Dittmann & Ryan 2022, eqs. 8-11
+# with delta = 0). Mass is removed at rate gamma*Omega_K(r_s)*s(r), with
+# s(r) = exp(-(r/r_s)^b), and only the radial momentum leaves with it. Energy
+# follows the adiabatic torque-free sink of Tiede, O'Neill & D'Orazio (2026),
+# arXiv:2606.04082 eq. (A5), which holds the specific internal energy of the
+# surviving gas fixed.
+gas_removing_sink = true
+sink_radius       = 0.1      # r_s; set equal to the softening length, as in the paper
+sink_rate         = 1.333333 # gamma, in units of Omega_K(r_s)
+sink_kernel_b     = 4        # integer exponent
+
 <problem>
 r_in  = 0.5
 a_in  = 0.05

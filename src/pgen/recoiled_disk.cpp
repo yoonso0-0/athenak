@@ -7,6 +7,7 @@
 //
 
 // C++ headers
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 #if MPI_PARALLEL_ENABLED
@@ -289,6 +290,28 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
               << "   ->    h/dx2 = " << h / min_dx2
               << "\n   - min dx3 (z) = " << min_dx3
               << "   ->    h/dx3 = " << h / min_dx3 << std::endl;
+  }
+
+  // @YK: report the torque-free gas-removing sink, if it is switched on
+  SourceTerms *psrc =
+      (pmbp->phydro != nullptr) ? pmbp->phydro->psrc : pmbp->pmhd->psrc;
+  if (global_variable::my_rank == 0 && psrc != nullptr &&
+      psrc->gas_removing_sink) {
+    const Real r_s = psrc->sink_radius;
+    const Real rate = psrc->sink_removal_rate;
+    const Real r_cut = psrc->sink_r_cut;
+    const Real min_dx = std::min(min_dx1, std::min(min_dx2, min_dx3));
+    std::cout << "\n Torque-free gas-removing sink at the origin :"
+              << "\n   - sink radius r_s     = " << r_s
+              << "   ->    r_s/min_dx = " << r_s / min_dx
+              << "\n   - kernel              = exp(-(r/r_s)^"
+              << psrc->sink_kernel_b << ")"
+              << "\n   - gamma (input)       = " << psrc->sink_rate
+              << "\n   - removal rate        = " << rate
+              << "  ( = gamma * Omega_K(r_s), t_s = " << 1.0 / rate << " )"
+              << "\n   - kernel cutoff r_cut = " << r_cut
+              << "   ->    r_cut/r_s = " << r_cut / r_s
+              << ",  r_cut/min_dx = " << r_cut / min_dx << std::endl;
   }
 
   return;

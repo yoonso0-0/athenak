@@ -10,6 +10,7 @@
 
 #include "srcterms.hpp"
 
+#include <cmath>
 #include <iostream>
 #include <string> // string
 
@@ -47,6 +48,34 @@ SourceTerms::SourceTerms(std::string block, MeshBlockPack *pp, ParameterInput *p
   point_particle_gravity_at_center =
       pin->GetOrAddBoolean(block, "point_particle_gravity_at_center", false);
   softening_length = pin->GetReal(block, "gravity_softening_length");
+
+  // @YK: gas-removing sink at the coordinate origin
+  gas_removing_sink = pin->GetOrAddBoolean(block, "gas_removing_sink", false);
+  if (gas_removing_sink) {
+    sink_radius = pin->GetReal(block, "sink_radius");
+    sink_rate = pin->GetReal(block, "sink_rate");
+    sink_kernel_b = pin->GetOrAddInteger(block, "sink_kernel_b", 4);
+
+    if (sink_radius <= 0.0 || sink_kernel_b <= 0 || sink_rate < 0.0) {
+      std::cout << "### FATAL ERROR in " << __FILE__ << " at line " << __LINE__
+                << std::endl
+                << "sink_radius and sink_kernel_b must be > 0 "
+                << "and sink_rate must be >= 0" << std::endl;
+      std::exit(EXIT_FAILURE);
+    }
+
+    // Derived quantities, precomputed here so that they are available to the
+    // problem generator for reporting as well as to GasRemovingSink below.
+    //   - the removal rate gamma * Omega_K(r_s), with GM = 1 as assumed
+    //     throughout PointParticleGravity
+    //   - the radius beyond which the kernel has underflowed to nothing
+    //     (s < e^-50 ~ 1e-22), used to skip cells far from the sink
+    const Real gm = 1.0;
+    sink_removal_rate =
+        sink_rate * std::sqrt(gm / (sink_radius * sink_radius * sink_radius));
+    sink_r_cut =
+        sink_radius * std::pow(50.0, 1.0 / static_cast<Real>(sink_kernel_b));
+  }
 
   // (1) read data for (constant) gravitational acceleration
   if (const_accel) {
@@ -106,6 +135,7 @@ void SourceTerms::ApplySrcTerms(const DvceArray5D<Real> &w0, const EOS_Data &eos
   // @YK
   if (point_particle_gravity_at_center)
     PointParticleGravity(w0, eos_data, bdt, u0);
+  if (gas_removing_sink) GasRemovingSink(w0, eos_data, bdt, u0);
 
   return;
 }
@@ -204,6 +234,181 @@ void SourceTerms::PointParticleGravity(const DvceArray5D<Real> &w0,
         u0(m, IM1, k, j, i) += dt_rho_src * x1v;
         u0(m, IM2, k, j, i) += dt_rho_src * x2v;
         u0(m, IM3, k, j, i) += dt_rho_src * x3v;
+      });
+}
+
+//----------------------------------------------------------------------------------------
+//! \fn SinkIntPow
+//! \brief x^n for integer n >= 0, by binary exponentiation. The sink kernel
+//! exponent b is always an integer, and this is appreciably cheaper than
+//! std::pow() with a floating-point exponent.
+
+KOKKOS_INLINE_FUNCTION
+Real SinkIntPow(Real x, int n) {
+  Real result = 1.0;
+  while (n > 0) {
+    if (n & 1) {
+      result *= x;
+    }
+    x *= x;
+    n >>= 1;
+  }
+  return result;
+}
+
+//
+// @YK: gas-removing sink at the coordinate origin
+//
+// Torque-free sink of Dittmann & Ryan (2022), MNRAS 513, 6158 (their eqs. 8-11
+// with delta = 0) for the mass and momentum, with the adiabatic energy sink of
+// Tiede, O'Neill & D'Orazio (2026), arXiv:2606.04082 (their eq. A5), all
+// specialised to a single, stationary sink sitting at the coordinate origin.
+//
+// Mass is removed at the rate  gamma * Omega_K(r_s) * s(r), where s is the
+// removal kernel
+//
+//   s(r) = exp( -(r/r_s)^b ),                     default b = 4,
+//
+// and the momentum that leaves with it is that of the *radial* motion alone,
+//
+//   v* = (v . rhat) rhat        (delta = 0, sink at rest at the origin).
+//
+// Dropping the tangential part is what makes the sink torque-free: it exerts
+// no torque on the gas about the origin, so all three components of the
+// angular momentum of the material left behind are untouched and the gas that
+// survives is spun up in specific angular momentum. rhat is the spherical
+// radial direction, consistent with the spherical radius used by
+// PointParticleGravity above; GM = 1 is likewise assumed there and here.
+//
+// The removal is linear in the stage increment, like any other operator-split
+// source term: the fraction of a cell taken in one stage is
+//
+//   f = rate * s * bdt,
+//
+// and the RK integrator supplies the higher-order-in-bdt corrections itself.
+// This does assume rate*bdt < 1, i.e. that the sink never tries to remove more
+// than a cell holds in a single stage. With rate = gamma*sqrt(GM/r_s^3) and
+// r_s resolved by several cells the CFL step satisfies this comfortably, since
+// the orbital time at r_s is then many time steps long.
+//
+// Energy is removed with the "adiabatic torque-free" prescription of Tiede,
+// O'Neill & D'Orazio (2026), arXiv:2606.04082, their eq. (A5),
+//
+//   S_E = -s Omega_b Sigma ( eps + |v*|^2 / 2 - |v_dag|^2 / 2 ) w,
+//
+// where eps is the *specific* internal energy and v_dag = v - v* is the part
+// of the velocity left behind. For a sink at rest at the origin v* = v_r rhat,
+// so |v*|^2 = v_r^2 and |v_dag|^2 = |v|^2 - v_r^2, and the bracket times rho
+// reduces to the coefficient used below,
+//
+//   e_int + rho * ( v_r^2 - |v|^2 / 2 ).
+//
+// The prescription does not depend on the choice of window function, so it
+// carries over unchanged to the Dittmann & Ryan kernel used here.
+//
+// The -|v_dag|^2/2 term is what makes the sink adiabatic. Torque-free removal
+// leaves the tangential momentum behind and so raises the specific kinetic
+// energy of the surviving gas; without that term (their eq. A4, the older
+// prescription) the sink cools the gas spuriously out to many r_s. With it,
+// the source term above conserves specific internal energy identically,
+// d(e_int/rho)/dt = 0, so eps is preserved up to the truncation error of the
+// RK integrator alone.
+//
+// Note that dE is not sign-definite: where rotation dominates the total energy
+// must *rise* to hold eps fixed. Substituting v* = v (a standard, non
+// torque-free sink) collapses the bracket to e_int + rho |v|^2 / 2 = E,
+// uniform removal of everything.
+
+void SourceTerms::GasRemovingSink(const DvceArray5D<Real> &w0,
+                                  const EOS_Data &eos_data, const Real bdt,
+                                  DvceArray5D<Real> &u0) {
+  auto &indcs = pmy_pack->pmesh->mb_indcs;
+  int is = indcs.is, ie = indcs.ie;
+  int js = indcs.js, je = indcs.je;
+  int ks = indcs.ks, ke = indcs.ke;
+  int nmb1 = (pmy_pack->nmb_thispack - 1);
+
+  auto &size = pmy_pack->pmb->mb_size;
+
+  const Real r_s = sink_radius;
+  const Real inv_r_s = 1.0 / r_s;
+  const int kernel_b = sink_kernel_b;
+
+  // Removal rate gamma * Omega_K(r_s), and the radius beyond which the kernel
+  // has underflowed to nothing; both precomputed in the constructor. The
+  // latter is a cheap guard so that the exp() below is evaluated only in the
+  // handful of cells near the sink rather than over the whole domain on every
+  // stage; it is squared here so that the test costs no square root either.
+  // rate * bdt is likewise loop-invariant and is formed once, here.
+  const Real rate_dt = sink_removal_rate * bdt;
+  const Real r_cut_sq = sink_r_cut * sink_r_cut;
+
+  const bool is_ideal = eos_data.is_ideal;
+
+  par_for(
+      "gas_removing_sink", DevExeSpace(), 0, nmb1, ks, ke, js, je, is, ie,
+      KOKKOS_LAMBDA(int m, int k, int j, int i) {
+        Real &x1min = size.d_view(m).x1min;
+        Real &x1max = size.d_view(m).x1max;
+        const Real x1v = CellCenterX(i - is, indcs.nx1, x1min, x1max);
+
+        Real &x2min = size.d_view(m).x2min;
+        Real &x2max = size.d_view(m).x2max;
+        const Real x2v = CellCenterX(j - js, indcs.nx2, x2min, x2max);
+
+        Real &x3min = size.d_view(m).x3min;
+        Real &x3max = size.d_view(m).x3max;
+        const Real x3v = CellCenterX(k - ks, indcs.nx3, x3min, x3max);
+
+        const Real r_sq = SQR(x1v) + SQR(x2v) + SQR(x3v);
+        if (r_sq > r_cut_sq) {
+          return;
+        }
+        const Real radius = std::sqrt(r_sq);
+
+        // Fraction of the cell removed over this stage, f = rate * s * bdt,
+        // with s the sink window function.
+        const Real f =
+            rate_dt * std::exp(-SinkIntPow(radius * inv_r_s, kernel_b));
+
+        const Real vx = w0(m, IVX, k, j, i);
+        const Real vy = w0(m, IVY, k, j, i);
+        const Real vz = w0(m, IVZ, k, j, i);
+
+        // Radial unit vector and radial velocity. The sink is at rest at the
+        // origin, so v* = (v . rhat) rhat with no sink-velocity offset. The
+        // r = 0 guard is defensive: cell centres do not land on the origin for
+        // an even number of zones, but rhat is undefined if they ever do, in
+        // which case no momentum is removed and only mass is taken.
+        Real rhat1 = 0.0, rhat2 = 0.0, rhat3 = 0.0, vr = 0.0;
+        if (radius > 0.0) {
+          const Real inv_r = 1.0 / radius;
+          rhat1 = x1v * inv_r;
+          rhat2 = x2v * inv_r;
+          rhat3 = x3v * inv_r;
+          vr = vx * rhat1 + vy * rhat2 + vz * rhat3;
+        }
+
+        // Mass taken from the cell over the stage, and the radial momentum
+        // that leaves with it (facc and facc * v* of the reference version).
+        const Real dens = w0(m, IDN, k, j, i);
+        const Real dmass = f * dens;
+        const Real dmom = dmass * vr;
+
+        u0(m, IDN, k, j, i) -= dmass;
+        u0(m, IM1, k, j, i) -= dmom * rhat1;
+        u0(m, IM2, k, j, i) -= dmom * rhat2;
+        u0(m, IM3, k, j, i) -= dmom * rhat3;
+
+        // Adiabatic energy sink. Guarded because an isothermal EOS carries no
+        // IEN slot at all (nhydro = 4), so w0(m,IEN,...) would run off the end
+        // of the variable index.
+        if (is_ideal) {
+          const Real v_sq = SQR(vx) + SQR(vy) + SQR(vz);
+          const Real denergy =
+              w0(m, IEN, k, j, i) + dens * (vr * vr - 0.5 * v_sq);
+          u0(m, IEN, k, j, i) -= f * denergy;
+        }
       });
 }
 
