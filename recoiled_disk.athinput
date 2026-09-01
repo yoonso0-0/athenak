@@ -6,45 +6,45 @@ basename  = recoiled_disk        # problem ID: basename of output filenames
 nghost    = 2           # Number of ghost cells
 
 nx1       = 128
-x1min     = -2.0
-x1max     = 2.0
-ix1_bc    = outflow
-ox1_bc    = outflow
+x1min     = -5.0
+x1max     = 5.0
+ix1_bc    = diode
+ox1_bc    = diode
 
 nx2       = 128
-x2min     = -2.0
-x2max     = 2.0
-ix2_bc    = outflow
-ox2_bc    = outflow
+x2min     = -5.0
+x2max     = 5.0
+ix2_bc    = diode
+ox2_bc    = diode
 
 nx3       = 128
-x3min     = -2.0
-x3max     = 2.0
-ix3_bc    = outflow
-ox3_bc    = outflow
+x3min     = -5.0
+x3max     = 5.0
+ix3_bc    = diode
+ox3_bc    = diode
 
 <meshblock>
-nx1       = 16
-nx2       = 16
-nx3       = 16
+nx1       = 32
+nx2       = 32
+nx3       = 32
 
-#<mesh_refinement>
-#refinement = static
+<mesh_refinement>
+refinement = static
 
-#<refined_region1>
-#level = 1
-#x1min = -0.1
-#x1max = 0.1
-#x2min = -0.1
-#x2max = 0.1
-#x3min = -0.1
-#x3max = 0.1
+<refined_region1>
+level = 1
+x1min = -0.1
+x1max = 0.1
+x2min = -0.1
+x2max = 0.1
+x3min = -0.1
+x3max = 0.1
 
 <time>
 evolution  = dynamic     # dynamic/kinematic/static
-integrator = rk3         # time integration algorithm
+integrator = rk2         # time integration algorithm
 cfl_number = 0.4         # The Courant, Friedrichs, & Lewy (CFL) Number
-nlim       = 0          # cycle limit
+nlim       = -1          # cycle limit
 tlim       = 2.0         # time limit
 ndiag      = 100         # cycles between diagostic output
 
@@ -67,25 +67,40 @@ gravity_softening_length = 0.1
 # follows the adiabatic torque-free sink of Tiede, O'Neill & D'Orazio (2026),
 # arXiv:2606.04082 eq. (A5), which holds the specific internal energy of the
 # surviving gas fixed.
+
 gas_removing_sink = true
 sink_radius       = 0.1      # r_s; set equal to the softening length, as in the paper
 sink_rate         = 1.333333 # gamma, in units of Omega_K(r_s)
 sink_kernel_b     = 4        # integer exponent
 
+# The sink's diagnostics go to their own history file, <basename>.sink.hst, written
+# by the same <output> block with file_type=hst that produces the .hydro and .user
+# files: M_snk, Lx/Ly/Lz_snk (cumulative) and Mdot_snk, Lxdot/Lydot/Lzdot_snk (rates).
+#
+# The angular momentum entries are what the removed gas was carrying: a torque-free
+# sink removes NO angular momentum, so these are what a standard sink would have taken
+# and what this prescription leaves behind in the surviving gas instead.
+#
+# The cumulative totals survive restarts via sink_accreted_mass/_lx/_ly/_lz, which are
+# written into the parameter dump inside each restart file. Do not copy those lines into
+# the input deck for a fresh run: they would start the counters part-way.
+
 <problem>
-r_in  = 0.5
+r_in  = 0.2
 a_in  = 0.05
-r_out = 6.0
-a_out = 0.2
+r_out = 2.0
+a_out = 0.1
 
 exponent_p = 0.0
 
 constant_scale_height = true
 scale_height_parameter = 0.1  # if `true` this is H. if `false`, this is h = H/R
 
-add_kick = true
-kick_magnitude = 1.0
-kick_angle = 0.52359877559  # 30deg
+add_rotation_corrections = true
+
+add_kick = false
+kick_magnitude = 0.0
+kick_angle = 0.0
 
 user_hist = true      # enroll user-defined history function
 
@@ -93,10 +108,10 @@ user_hist = true      # enroll user-defined history function
 
 <output1>
 file_type  = hst         # History data dump
-dcycle     = 1        # time increment between outputs
+dcycle     = 10          # time increment between outputs
 
 <output2>
 file_type  = bin        # Binary data dump
 variable   = hydro_w    # variables to be output
-#dt         = 0.05      # time increment between outputs
-dcycle = 1
+dt         = 0.1      # time increment between outputs
+#dcycle = 1

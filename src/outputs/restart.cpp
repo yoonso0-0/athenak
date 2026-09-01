@@ -28,6 +28,7 @@
 #include "z4c/compact_object_tracker.hpp"
 #include "z4c/z4c.hpp"
 #include "radiation/radiation.hpp"
+#include "srcterms/srcterms.hpp"
 #include "srcterms/turb_driver.hpp"
 //#include "outputs.hpp"
 
@@ -198,6 +199,16 @@ void RestartOutput::WriteOutputFile(Mesh *pm, ParameterInput *pin) {
   }
   pin->SetInteger(out_params.block_name, "file_number", out_params.file_number);
   pin->SetReal(out_params.block_name, "last_time", out_params.last_time);
+
+  // Give source terms that carry running totals a chance to record them in the input
+  // parameters, so that they are picked up again by the SourceTerms constructor on a
+  // restart instead of silently restarting from zero.
+  if (pm->pmb_pack->phydro != nullptr && pm->pmb_pack->phydro->psrc != nullptr) {
+    pm->pmb_pack->phydro->psrc->StoreSinkAccumInInput(pin);
+  }
+  if (pm->pmb_pack->pmhd != nullptr && pm->pmb_pack->pmhd->psrc != nullptr) {
+    pm->pmb_pack->pmhd->psrc->StoreSinkAccumInInput(pin);
+  }
 
   // create string holding input parameters (copy of input file)
   std::stringstream ost;

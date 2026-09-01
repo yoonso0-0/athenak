@@ -22,7 +22,30 @@
 #include "mhd/mhd.hpp"
 #include "z4c/z4c.hpp"
 #include "coordinates/adm.hpp"
+#include "coordinates/cell_locations.hpp"
+#include "srcterms/srcterms.hpp"
 #include "outputs.hpp"
+
+//----------------------------------------------------------------------------------------
+//! \fn SinkSrcTerms
+//! @YK: returns the SourceTerms object carrying an enabled gas-removing sink, or nullptr
+//! if no sink is switched on. Only one of hydro/MHD is ever active in a given run, so at
+//! most one of these can match.
+
+namespace {
+SourceTerms* SinkSrcTerms(Mesh *pm) {
+  MeshBlockPack *pmbp = pm->pmb_pack;
+  if (pmbp->phydro != nullptr && pmbp->phydro->psrc != nullptr &&
+      pmbp->phydro->psrc->gas_removing_sink) {
+    return pmbp->phydro->psrc;
+  }
+  if (pmbp->pmhd != nullptr && pmbp->pmhd->psrc != nullptr &&
+      pmbp->pmhd->psrc->gas_removing_sink) {
+    return pmbp->pmhd->psrc;
+  }
+  return nullptr;
+}
+}  // namespace
 
 //----------------------------------------------------------------------------------------
 // Constructor: also calls BaseTypeOutput base class constructor
@@ -49,6 +72,13 @@ HistoryOutput::HistoryOutput(ParameterInput *pin, Mesh *pm, OutputParameters op)
   if (pm->pmb_pack->pz4c != nullptr) {
     hist_data.emplace_back(PhysicsModule::SpaceTimeDynamics);
   }
+
+  // @YK: the gas-removing sink writes its own file. Added irrespective of user_hist_only,
+  // since these diagnostics belong to the source term rather than to any problem
+  // generator, and every pgen that enables the sink should get them.
+  if (SinkSrcTerms(pm) != nullptr) {
+    hist_data.emplace_back(PhysicsModule::SinkDiagnostics);
+  }
 }
 
 //----------------------------------------------------------------------------------------
@@ -66,6 +96,8 @@ void HistoryOutput::LoadOutputData(Mesh *pm) {
       LoadZ4cHistoryData(&data, pm);
     } else if (data.physics == PhysicsModule::UserDefined) {
       (pm->pgen->user_hist_func)(&data, pm);
+    } else if (data.physics == PhysicsModule::SinkDiagnostics) {
+      LoadSinkHistoryData(&data, pm);
     }
   }
 }
@@ -376,6 +408,135 @@ void HistoryOutput::LoadMHDHistoryData(HistoryData *pdata, Mesh *pm) {
 }
 
 //----------------------------------------------------------------------------------------
+//! \fn void HistoryOutput::LoadSinkHistoryData()
+//! @YK: history data for the gas-removing sink of Dittmann & Ryan (2022), written to
+//! <basename>.sink.hst. Eight columns: the cumulative mass and angular momentum the sink
+//! has taken out of the domain, and the corresponding instantaneous rates.
+//!
+//! The cumulative entries are running sums maintained by SourceTerms::GasRemovingSink
+//! over every RK stage (weighted by Driver::src_wt), not volume integrals of the current
+//! state, so they are read straight off the source-term object. The rates are volume
+//! integrals of the current state and use SinkWindow() from srcterms.hpp, the same window
+//! the source term applies, so the two cannot drift apart. Together they are two
+//! independent estimates of the same quantities and cross-check each other.
+//!
+//! NOTE the angular momentum entries are the angular momentum about the origin carried by
+//! the removed gas, NOT angular momentum removed from the domain, which is identically
+//! zero for this torque-free prescription: the momentum it takes is purely radial, so
+//! r x dp = 0. They measure what a standard sink would have removed and what this
+//! prescription instead leaves behind in the surviving gas.
+
+void HistoryOutput::LoadSinkHistoryData(HistoryData *pdata, Mesh *pm) {
+  pdata->nhist = 8;
+  pdata->label[0] = "M_snk";
+  pdata->label[1] = "Lx_snk";
+  pdata->label[2] = "Ly_snk";
+  pdata->label[3] = "Lz_snk";
+  pdata->label[4] = "Mdot_snk";
+  pdata->label[5] = "Lxdot_snk";
+  pdata->label[6] = "Lydot_snk";
+  pdata->label[7] = "Lzdot_snk";
+
+  // Cannot happen: the SinkDiagnostics entry is only added when a sink exists, and the
+  // flag is fixed for the run. Handled anyway so that hdata is never left uninitialised.
+  SourceTerms *psrc = SinkSrcTerms(pm);
+  if (psrc == nullptr) {
+    for (int n=0; n<pdata->nhist; ++n) {pdata->hdata[n] = 0.0;}
+    return;
+  }
+
+  // Primitives of whichever module owns the sink. Test which one holds this psrc rather
+  // than which one exists: a run can have both <hydro> and <mhd> blocks (see
+  // MeshBlockPack::MeshBlockPack), so "phydro != nullptr" does not imply the sink is on
+  // the hydro source terms.
+  bool sink_in_hydro = (pm->pmb_pack->phydro != nullptr &&
+                        pm->pmb_pack->phydro->psrc == psrc);
+  auto &w0_ = sink_in_hydro ? pm->pmb_pack->phydro->w0 : pm->pmb_pack->pmhd->w0;
+  auto &size = pm->pmb_pack->pmb->mb_size;
+  int &nhist_ = pdata->nhist;
+
+  // sink kernel parameters, copied to locals for capture by the device lambda
+  const Real snk_rate = psrc->sink_removal_rate;
+  const Real snk_inv_rs = 1.0/psrc->sink_radius;
+  const int snk_b = psrc->sink_kernel_b;
+  const Real snk_r_cut_sq = SQR(psrc->sink_r_cut);
+
+  // loop over all MeshBlocks in this pack
+  auto &indcs = pm->pmb_pack->pmesh->mb_indcs;
+  int is = indcs.is; int nx1 = indcs.nx1;
+  int js = indcs.js; int nx2 = indcs.nx2;
+  int ks = indcs.ks; int nx3 = indcs.nx3;
+  const int nmkji = (pm->pmb_pack->nmb_thispack)*nx3*nx2*nx1;
+  const int nkji = nx3*nx2*nx1;
+  const int nji  = nx2*nx1;
+  array_sum::GlobalSum sum_this_mb;
+  Kokkos::parallel_reduce("SinkHistSums",Kokkos::RangePolicy<>(DevExeSpace(), 0, nmkji),
+  KOKKOS_LAMBDA(const int &idx, array_sum::GlobalSum &mb_sum) {
+    // compute n,k,j,i indices of thread
+    int m = (idx)/nkji;
+    int k = (idx - m*nkji)/nji;
+    int j = (idx - m*nkji - k*nji)/nx1;
+    int i = (idx - m*nkji - k*nji - j*nx1) + is;
+    k += ks;
+    j += js;
+
+    array_sum::GlobalSum hvars;
+    for (int n=0; n<NHISTORY_VARIABLES; ++n) {
+      hvars.the_array[n] = 0.0;
+    }
+
+    Real &x1min = size.d_view(m).x1min;
+    Real &x1max = size.d_view(m).x1max;
+    Real x1v = CellCenterX(i-is, nx1, x1min, x1max);
+
+    Real &x2min = size.d_view(m).x2min;
+    Real &x2max = size.d_view(m).x2max;
+    Real x2v = CellCenterX(j-js, nx2, x2min, x2max);
+
+    Real &x3min = size.d_view(m).x3min;
+    Real &x3max = size.d_view(m).x3max;
+    Real x3v = CellCenterX(k-ks, nx3, x3min, x3max);
+
+    // Same r_cut guard as GasRemovingSink: outside it the kernel has underflowed to
+    // nothing, so this skips the exp() everywhere but the handful of cells near the sink.
+    Real r_sq = SQR(x1v) + SQR(x2v) + SQR(x3v);
+    if (r_sq <= snk_r_cut_sq) {
+      Real vol = size.d_view(m).dx1*size.d_view(m).dx2*size.d_view(m).dx3;
+      Real radius = std::sqrt(r_sq);
+      Real vx = w0_(m,IVX,k,j,i);
+      Real vy = w0_(m,IVY,k,j,i);
+      Real vz = w0_(m,IVZ,k,j,i);
+
+      // integrands of dM/dt = int gamma Omega_K(r_s) s(r) rho dV and its (r x v) moments
+      Real mdot = snk_rate*SinkWindow(radius, snk_inv_rs, snk_b)*vol*w0_(m,IDN,k,j,i);
+      hvars.the_array[4] = mdot;
+      hvars.the_array[5] = mdot*(x2v*vz - x3v*vy);
+      hvars.the_array[6] = mdot*(x3v*vx - x1v*vz);
+      hvars.the_array[7] = mdot*(x1v*vy - x2v*vx);
+    }
+
+    // sum into parallel reduce
+    mb_sum += hvars;
+  }, Kokkos::Sum<array_sum::GlobalSum>(sum_this_mb));
+
+  // store data into hdata array
+  for (int n=0; n<nhist_; ++n) {
+    pdata->hdata[n] = sum_this_mb.the_array[n];
+  }
+
+  // Cumulative totals overwrite slots 0-3. These are this rank's partial sums; the
+  // MPI_Reduce in WriteOutputFile adds the ranks together exactly as for the reduced
+  // columns above.
+  Real snk_acc[SourceTerms::nsink_accum];
+  psrc->SinkAccumOnHost(snk_acc);
+  for (int n=0; n<SourceTerms::nsink_accum; ++n) {
+    pdata->hdata[n] = snk_acc[n];
+  }
+
+  return;
+}
+
+//----------------------------------------------------------------------------------------
 //! \fn void HistoryOutput::WriteOutputFile()
 //  \brief Cycles through hist_data vector and writes history file for each component
 
@@ -409,6 +570,9 @@ void HistoryOutput::WriteOutputFile(Mesh *pm, ParameterInput *pin) {
           fname.append(".z4c");
         case PhysicsModule::UserDefined:
           fname.append(".user");
+          break;
+        case PhysicsModule::SinkDiagnostics:
+          fname.append(".sink");
           break;
         default:
           break;

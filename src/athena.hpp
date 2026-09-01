@@ -78,8 +78,11 @@ enum ReconstructionMethod {dc, plm, ppm4, ppmx, wenoz, teno};
 enum TimeEvolution {tstatic, kinematic, dynamic};
 
 // constants that enumerate Physics Modules implemented in code
+// @YK: SinkDiagnostics gives the gas-removing sink its own history file
+// (<basename>.sink.hst) instead of crowding the columns into the user history.
 enum PhysicsModule {HydroDynamics, MagnetoHydroDynamics,
-                    SpaceTimeDynamics, UserDefined}; //SpaceTimeDynamics = Z4c
+                    SpaceTimeDynamics, UserDefined,
+                    SinkDiagnostics}; //SpaceTimeDynamics = Z4c
 
 // structs to store primitive/conserved variables in one-dimension
 // (density, velocity/momentum, internal/total energy, [transverse magnetic field])

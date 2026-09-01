@@ -361,6 +361,9 @@ void RecoiledDiskHistory(HistoryData *pdata, Mesh *pm) {
   pdata->label[11] = "M_rsoft";  // mass within softening radius
   pdata->label[12] = "KE";
   pdata->label[13] = "PE";
+  // NOTE the gas-removing sink's diagnostics are not here: they are written to their own
+  // <basename>.sink.hst by HistoryOutput::LoadSinkHistoryData, since they belong to the
+  // source term rather than to this problem generator.
 
   // loop over all MeshBlocks in this pack
   auto &indcs = pm->pmb_pack->pmesh->mb_indcs;
@@ -417,8 +420,10 @@ void RecoiledDiskHistory(HistoryData *pdata, Mesh *pm) {
         const Real dens = u0_(m, IDN, k, j, i);
         const Real cell_mass = vol * dens;
         const Real eint = w0_(m, IEN, k, j, i); // internal energy density
-        const Real v2 = SQR(w0_(m, IVX, k, j, i)) + SQR(w0_(m, IVY, k, j, i)) +
-                        SQR(w0_(m, IVZ, k, j, i));
+        const Real vx = w0_(m, IVX, k, j, i);
+        const Real vy = w0_(m, IVY, k, j, i);
+        const Real vz = w0_(m, IVZ, k, j, i);
+        const Real v2 = SQR(vx) + SQR(vy) + SQR(vz);
 
         // spherical radius, softened 1/r, and potential per unit mass (GM = 1)
         const Real radius = std::sqrt(x1v * x1v + x2v * x2v + x3v * x3v);

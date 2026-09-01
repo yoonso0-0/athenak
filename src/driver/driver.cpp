@@ -6,11 +6,13 @@
 //! \file driver.cpp
 //  \brief implementation of functions in class Driver
 
+#include <cmath>      // std::abs()
 #include <iostream>
 #include <iomanip>    // std::setprecision()
 #include <limits>
 #include <algorithm>
 #include <cstdlib>
+#include <sstream>    // stringstream
 #include <string> // string
 
 #include "athena.hpp"
@@ -27,6 +29,7 @@
 #include "radiation/radiation.hpp"
 #include "driver.hpp"
 #include "gravity/gravity.hpp"
+#include "srcterms/srcterms.hpp"
 #include "utils/utils.hpp"
 
 #if MPI_PARALLEL_ENABLED
@@ -289,6 +292,66 @@ Driver::Driver(ParameterInput *pin, Mesh *pmesh, Real wtlim, Kokkos::Timer* ptim
          << std::endl << "integrator=" << integrator << " not implemented. "
          << "Valid choices are [rk1,rk2,rk3,rk4,imex2,imex3]." << std::endl;
       exit(EXIT_FAILURE);
+    }
+
+    // @YK: effective weight of each explicit stage's source-term contribution to
+    // u^{n+1}.  Source terms are added to u0 *after* RKUpdate has already formed
+    //     u0 = gam0*u0 + gam1*u1 - beta*dt*div(F)
+    // (see the task ordering in Hydro::AssembleHydroTasks, where srctrms depends on
+    // rkupdt), so a contribution added at stage i is rescaled by gam0 at every later
+    // stage:
+    //     w_i = beta[i] * prod_{j>i} gam0[j].
+    // Diagnostics that accumulate a source term over a cycle -- e.g. the mass removed
+    // by the gas-removing sink -- must weight each stage by w_i*dt and NOT by the
+    // beta[i]*dt that is passed to the source-term functions themselves.  The two are
+    // very different: sum(beta) is 1.5 for rk2 and 1.9167 for rk3, whereas the correct
+    // weights are (1/2,1/2) and (1/6,1/6,2/3), so weighting by beta would overcount
+    // the accumulated total by 50% and 92% respectively.
+    Real wsum = 0.0;
+    {
+      Real prod = 1.0;
+      for (int i=(nexp_stages-1); i>=0; --i) {
+        src_wt[i] = beta[i]*prod;
+        prod *= gam0[i];
+      }
+      for (int i=0; i<nexp_stages; ++i) {wsum += src_wt[i];}
+    }
+    // Any consistent scheme must satisfy sum(w_i) = 1, since a constant source S has to
+    // integrate to dt*S over the cycle.  This is more than a sanity check on the
+    // arithmetic above: the relation w_i = beta[i]*prod(gam0) assumes u1 holds u^n for
+    // the whole cycle, which is true for rk1/rk2/rk3 but false for the 2S rk4 (CopyCons
+    // does u1 += delta*u0 at later stages, so source contributions also propagate
+    // through the u1 register) and for the ImEx schemes, which start from
+    // gam0[0]=1,gam1[0]=0.  Those schemes fail this test -- rk4 sums to 0.4169 -- so it
+    // fires precisely where the derivation breaks down rather than only where a
+    // coefficient was mistyped.
+    src_wt_exact = (std::abs(wsum - 1.0) < 1.0e-12);
+
+    // Only fatal if something actually consumes the weights, so that rk4 and the ImEx
+    // integrators remain usable for every other problem.
+    {
+      bool needs_src_wt = false;
+      auto *phyd = pmesh->pmb_pack->phydro;
+      auto *pmhd = pmesh->pmb_pack->pmhd;
+      if (phyd != nullptr && phyd->psrc != nullptr) {
+        needs_src_wt = needs_src_wt || phyd->psrc->gas_removing_sink;
+      }
+      if (pmhd != nullptr && pmhd->psrc != nullptr) {
+        needs_src_wt = needs_src_wt || pmhd->psrc->gas_removing_sink;
+      }
+      if (needs_src_wt && !src_wt_exact) {
+        std::stringstream msg;
+        msg << "The gas-removing sink accumulates the mass and angular momentum it "
+            << "removes over each cycle, which requires the per-stage source-term "
+            << "weights w_i = beta[i]*prod_{j>i} gam0[j]." << std::endl
+            << "These sum to " << std::setprecision(12) << wsum << " for integrator='"
+            << integrator << "', not 1, so they do not describe how this integrator "
+            << "actually accumulates source terms and the totals would be wrong."
+            << std::endl
+            << "Use integrator=rk2 or rk3 (rk1 also works), or disable "
+            << "gas_removing_sink.";
+        DriverFatalError(__FILE__, __LINE__, msg.str());
+      }
     }
 
     ValidateSTSConfiguration(pmesh);

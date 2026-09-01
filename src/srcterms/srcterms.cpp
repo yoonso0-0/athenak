@@ -11,14 +11,22 @@
 #include "srcterms.hpp"
 
 #include <cmath>
+#include <iomanip>  // setprecision()
 #include <iostream>
+#include <limits>   // numeric_limits
+#include <sstream>  // ostringstream
 #include <string> // string
+
+#if MPI_PARALLEL_ENABLED
+#include <mpi.h>
+#endif
 
 #include "athena.hpp"
 #include "coordinates/cartesian_ks.hpp"
 #include "coordinates/cell_locations.hpp"
 #include "eos/eos.hpp"
 #include "geodesic-grid/geodesic_grid.hpp"
+#include "globals.hpp"
 #include "gravity/gravity.hpp"
 #include "hydro/hydro.hpp"
 #include "ismcooling.hpp"
@@ -75,6 +83,25 @@ SourceTerms::SourceTerms(std::string block, MeshBlockPack *pp, ParameterInput *p
         sink_rate * std::sqrt(gm / (sink_radius * sink_radius * sink_radius));
     sink_r_cut =
         sink_radius * std::pow(50.0, 1.0 / static_cast<Real>(sink_kernel_b));
+
+    // Running totals of what the sink has taken out. On a restart these come back from
+    // the parameter dump embedded in the restart file (see StoreSinkAccumInInput). The
+    // stored values are global sums, while sink_accum holds a per-rank partial, so only
+    // rank 0 is seeded with them; every other rank starts from zero and the sum over
+    // ranks still comes out right. GetOrAddReal is called on all ranks regardless, so
+    // that the parameters are marked as used everywhere and CheckUnusedParameters stays
+    // quiet.
+    sink_block = block;
+    sink_accum = DvceArray1D<Real>("sink_accum", nsink_accum);
+    HostArray1D<Real> acc_h("sink_accum_h", nsink_accum);
+    acc_h(0) = pin->GetOrAddReal(block, "sink_accreted_mass", 0.0);
+    acc_h(1) = pin->GetOrAddReal(block, "sink_accreted_lx", 0.0);
+    acc_h(2) = pin->GetOrAddReal(block, "sink_accreted_ly", 0.0);
+    acc_h(3) = pin->GetOrAddReal(block, "sink_accreted_lz", 0.0);
+    if (global_variable::my_rank != 0) {
+      for (int n=0; n<nsink_accum; ++n) {acc_h(n) = 0.0;}
+    }
+    Kokkos::deep_copy(sink_accum, acc_h);
   }
 
   // (1) read data for (constant) gravitational acceleration
@@ -125,7 +152,8 @@ SourceTerms::~SourceTerms() {
 //! implemented for fluid and radiation fields, distinguished by their argument lists
 
 void SourceTerms::ApplySrcTerms(const DvceArray5D<Real> &w0, const EOS_Data &eos_data,
-                                const Real bdt, DvceArray5D<Real> &u0) {
+                                const Real bdt, const Real acc_dt,
+                                DvceArray5D<Real> &u0) {
   // NOTE source terms must be computed using primitive (w0) and NOT conserved (u0) vars
   if (const_accel) ConstantAccel(w0, eos_data,  bdt, u0);
   if (ism_cooling) ISMCooling(w0, eos_data, bdt, u0);
@@ -135,7 +163,7 @@ void SourceTerms::ApplySrcTerms(const DvceArray5D<Real> &w0, const EOS_Data &eos
   // @YK
   if (point_particle_gravity_at_center)
     PointParticleGravity(w0, eos_data, bdt, u0);
-  if (gas_removing_sink) GasRemovingSink(w0, eos_data, bdt, u0);
+  if (gas_removing_sink) GasRemovingSink(w0, eos_data, bdt, acc_dt, u0);
 
   return;
 }
@@ -237,25 +265,6 @@ void SourceTerms::PointParticleGravity(const DvceArray5D<Real> &w0,
       });
 }
 
-//----------------------------------------------------------------------------------------
-//! \fn SinkIntPow
-//! \brief x^n for integer n >= 0, by binary exponentiation. The sink kernel
-//! exponent b is always an integer, and this is appreciably cheaper than
-//! std::pow() with a floating-point exponent.
-
-KOKKOS_INLINE_FUNCTION
-Real SinkIntPow(Real x, int n) {
-  Real result = 1.0;
-  while (n > 0) {
-    if (n & 1) {
-      result *= x;
-    }
-    x *= x;
-    n >>= 1;
-  }
-  return result;
-}
-
 //
 // @YK: gas-removing sink at the coordinate origin
 //
@@ -321,7 +330,7 @@ Real SinkIntPow(Real x, int n) {
 
 void SourceTerms::GasRemovingSink(const DvceArray5D<Real> &w0,
                                   const EOS_Data &eos_data, const Real bdt,
-                                  DvceArray5D<Real> &u0) {
+                                  const Real acc_dt, DvceArray5D<Real> &u0) {
   auto &indcs = pmy_pack->pmesh->mb_indcs;
   int is = indcs.is, ie = indcs.ie;
   int js = indcs.js, je = indcs.je;
@@ -342,6 +351,15 @@ void SourceTerms::GasRemovingSink(const DvceArray5D<Real> &w0,
   // rate * bdt is likewise loop-invariant and is formed once, here.
   const Real rate_dt = sink_removal_rate * bdt;
   const Real r_cut_sq = sink_r_cut * sink_r_cut;
+
+  // Same product for the running totals below, but weighted by the integrator's
+  // effective per-stage source weight (Driver::src_wt) rather than by bdt. The two
+  // differ because RKUpdate rescales earlier stages' source contributions by gam0:
+  // bdt = beta[stage]*dt sums to 1.5*dt over an rk2 cycle and 1.9167*dt over an rk3
+  // cycle, whereas acc_dt sums to exactly dt. Using bdt here would overcount the
+  // accreted mass by 50% and 92% respectively.
+  const Real rate_acc_dt = sink_removal_rate * acc_dt;
+  auto accum = sink_accum;
 
   const bool is_ideal = eos_data.is_ideal;
 
@@ -367,9 +385,11 @@ void SourceTerms::GasRemovingSink(const DvceArray5D<Real> &w0,
         const Real radius = std::sqrt(r_sq);
 
         // Fraction of the cell removed over this stage, f = rate * s * bdt,
-        // with s the sink window function.
-        const Real f =
-            rate_dt * std::exp(-SinkIntPow(radius * inv_r_s, kernel_b));
+        // with s the sink window function. f_acc is the same fraction weighted for
+        // the running totals rather than for the update; see rate_acc_dt above.
+        const Real s = SinkWindow(radius, inv_r_s, kernel_b);
+        const Real f = rate_dt * s;
+        const Real f_acc = rate_acc_dt * s;
 
         const Real vx = w0(m, IVX, k, j, i);
         const Real vy = w0(m, IVY, k, j, i);
@@ -409,7 +429,79 @@ void SourceTerms::GasRemovingSink(const DvceArray5D<Real> &w0,
               w0(m, IEN, k, j, i) + dens * (vr * vr - 0.5 * v_sq);
           u0(m, IEN, k, j, i) -= f * denergy;
         }
+
+        // Running totals of what the sink has removed from the domain. The mass is
+        // f_acc*rho*dV; the angular momentum entries are the angular momentum about
+        // the origin that this mass was carrying, dm * (r x v).
+        //
+        // Note those entries are NOT the angular momentum the sink takes out, which
+        // is identically zero: the momentum removed just above is dm*v_r*rhat, so
+        // r x dp vanishes and the domain's angular momentum is untouched. They are
+        // what a standard (non torque-free) sink would have removed and what this
+        // prescription leaves behind in the surviving gas instead.
+        //
+        // Atomics, not a reduction: the early return above means only the handful of
+        // cells inside r_cut ever get here, so this is far cheaper than turning the
+        // whole-domain par_for into a parallel_reduce, and it avoids a device
+        // synchronisation on every stage. The cost is that the summation order is not
+        // reproducible, so these totals can differ in their last bits between runs.
+        // That is confined to the diagnostic: u0 is untouched by these lines and the
+        // evolution stays bitwise reproducible.
+        const Real vol =
+            size.d_view(m).dx1 * size.d_view(m).dx2 * size.d_view(m).dx3;
+        const Real dmass_acc = f_acc * dens * vol;
+        Kokkos::atomic_add(&accum(0), dmass_acc);
+        Kokkos::atomic_add(&accum(1), dmass_acc * (x2v * vz - x3v * vy));
+        Kokkos::atomic_add(&accum(2), dmass_acc * (x3v * vx - x1v * vz));
+        Kokkos::atomic_add(&accum(3), dmass_acc * (x1v * vy - x2v * vx));
       });
+}
+
+//----------------------------------------------------------------------------------------
+//! \fn SourceTerms::SinkAccumOnHost
+//! \brief copies this rank's running sink totals to the host, in the order
+//! (mass, Lx, Ly, Lz). The caller must provide space for nsink_accum values. These are
+//! per-rank partial sums; summing over ranks is the caller's business.
+
+void SourceTerms::SinkAccumOnHost(Real *vals) {
+  HostArray1D<Real> acc_h("sink_accum_h", nsink_accum);
+  Kokkos::deep_copy(acc_h, sink_accum);
+  for (int n=0; n<nsink_accum; ++n) {
+    vals[n] = acc_h(n);
+  }
+  return;
+}
+
+//----------------------------------------------------------------------------------------
+//! \fn SourceTerms::StoreSinkAccumInInput
+//! \brief writes the global running sink totals into the ParameterInput, so that they
+//! survive a restart. Called from RestartOutput::WriteOutputFile just before the
+//! parameter dump that gets embedded in the restart file; the SourceTerms constructor
+//! reads them back. Using the parameter dump rather than the binary payload keeps the
+//! restart file layout unchanged, so restart files stay readable both ways.
+
+void SourceTerms::StoreSinkAccumInInput(ParameterInput *pin) {
+  if (!gas_removing_sink) {return;}
+
+  Real vals[nsink_accum];
+  SinkAccumOnHost(vals);
+#if MPI_PARALLEL_ENABLED
+  MPI_Allreduce(MPI_IN_PLACE, vals, nsink_accum, MPI_ATHENA_REAL, MPI_SUM,
+                MPI_COMM_WORLD);
+#endif
+
+  // Written as strings rather than with SetReal, which formats with the default stream
+  // precision of six significant digits. That would requantise a running total at every
+  // restart; atof on the way back in recovers a full-precision string exactly.
+  static const char *names[nsink_accum] = {"sink_accreted_mass", "sink_accreted_lx",
+                                           "sink_accreted_ly", "sink_accreted_lz"};
+  for (int n=0; n<nsink_accum; ++n) {
+    std::ostringstream os;
+    os << std::scientific
+       << std::setprecision(std::numeric_limits<Real>::max_digits10 - 1) << vals[n];
+    pin->SetString(sink_block, names[n], os.str());
+  }
+  return;
 }
 
 //----------------------------------------------------------------------------------------
