@@ -145,7 +145,7 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
   if (restart) return;
 
   Real rout = pin->GetReal("problem", "outer_radius");
-  Real rin  = rout - pin->GetReal("problem", "inner_radius");
+  Real rin  = pin->GetReal("problem", "inner_radius");
   // values for neutrals (hydro fluid)
   Real pn_amb   = pin->GetOrAddReal("problem", "pn_amb", 1.0);
   Real dn_amb   = pin->GetOrAddReal("problem", "dn_amb", 1.0);
