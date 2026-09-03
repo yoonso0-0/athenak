@@ -287,10 +287,12 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
           pres *= prat;
         } else {   // add smooth ramp in density
           Real f = (rad-rin) / (rout-rin);
-          Real log_den = (1.0-f) * log(drat*di_amb) + f * log(di_amb);
-          den = exp(log_den);
-          Real log_pres = (1.0-f) * log(prat*pi_amb) + f * log(pi_amb);
-          pres = exp(log_pres);
+          // Real log_den = (1.0-f) * log(drat*di_amb) + f * log(di_amb);
+          // den = exp(log_den);
+          // Real log_pres = (1.0-f) * log(prat*pi_amb) + f * log(pi_amb);
+          // pres = exp(log_pres);
+          Real den = (1.0 - f) * (drat * di_amb) + f * (di_amb);
+          Real pres = (1.0 - f) * (prat * pi_amb) + f * (pi_amb);
         }
       }
       w0_(m,IDN,k,j,i) = den;
@@ -342,6 +344,7 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
       Real dx3 = size.d_view(m).dx3;
 
       Real y = x2f;
+      Real x = x1f;
 
       if (warp) {
         y = GetCartesianFromScrewball(x2f, a_warp);
@@ -350,7 +353,7 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
         GetCartesianFromRipple(x, y, x1f, x2f, A_snake, k_snake);
       }
 
-      a3(m,k,j,i) = b_amb*y;
+      a3(m,k,j,i) = b_amb*(y-x);
     });
 
 
