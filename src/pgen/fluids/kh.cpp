@@ -117,11 +117,11 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
     if (iprob == 1) {
       pres = 20.0;
       dens = 1.0;
-      vx = -vshear*tanh(x2v/sigma);
-      vy = -amp*vshear*sin(2.*M_PI*x1v)*exp( -SQR(x2v/sigma) );
+      vx = vshear*tanh(x2v/0.01);
+      vy = amp*vshear*sin(2.*M_PI*x1v)*exp( -SQR(x2v/0.1) );
       vz = 0.0;
       scal = 0.0;
-      if (x2v > 0.5) scal = 1.0;
+      if (x2v > 0.0) scal = 1.0;
     } else if (iprob == 2) {
       // pres = 1.0;
       pres = p_in;
@@ -193,20 +193,22 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
   // initialize magnetic fields if MHD
   if (pmbp->pmhd != nullptr) {
     // Read magnetic field strength
-    Real bx = pin->GetReal("problem","b0");
+    Real bx = pin->GetReal("problem","bx");
+    Real by = pin->GetReal("problem","by");
+    Real bz = pin->GetReal("problem","bz");
     auto &b0 = pmbp->pmhd->b0;
     auto &bcc0 = pmbp->pmhd->bcc0;
     par_for("pgen_b0", DevExeSpace(), 0,(pmbp->nmb_thispack-1),ks,ke,js,je,is,ie,
     KOKKOS_LAMBDA(int m, int k, int j, int i) {
       b0.x1f(m,k,j,i) = bx;
-      b0.x2f(m,k,j,i) = 0.0;
-      b0.x3f(m,k,j,i) = 0.0;
+      b0.x2f(m,k,j,i) = by;
+      b0.x3f(m,k,j,i) = bz;
       if (i==ie) b0.x1f(m,k,j,i+1) = bx;
-      if (j==je) b0.x2f(m,k,j+1,i) = 0.0;
-      if (k==ke) b0.x3f(m,k+1,j,i) = 0.0;
+      if (j==je) b0.x2f(m,k,j+1,i) = by;
+      if (k==ke) b0.x3f(m,k+1,j,i) = bz;
       bcc0(m,IBX,k,j,i) = bx;
-      bcc0(m,IBY,k,j,i) = 0.0;
-      bcc0(m,IBZ,k,j,i) = 0.0;
+      bcc0(m,IBY,k,j,i) = by;
+      bcc0(m,IBZ,k,j,i) = bz;
     });
   }
 
