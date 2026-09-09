@@ -44,7 +44,7 @@ MeshBlock::MeshBlock(MeshBlockPack* ppack, int igids, int nmb) :
       mb_size.h_view(m).x1min = ms.x1min;
       mb_bcs.h_view(m,0) = pm->mesh_bcs[BoundaryFace::inner_x1];
     } else {
-      mb_size.h_view(m).x1min = LeftEdgeX(lx1, nmbx1, ms.x1min, ms.x1max);
+      mb_size.h_view(m).x1min = SymmetricLeftEdgeX(lx1, nmbx1, ms.x1min, ms.x1max);
       mb_bcs.h_view(m,0) = BoundaryFlag::block;
     }
 
@@ -52,7 +52,7 @@ MeshBlock::MeshBlock(MeshBlockPack* ppack, int igids, int nmb) :
       mb_size.h_view(m).x1max = ms.x1max;
       mb_bcs.h_view(m,1) = pm->mesh_bcs[BoundaryFace::outer_x1];
     } else {
-      mb_size.h_view(m).x1max = LeftEdgeX(lx1+1, nmbx1, ms.x1min, ms.x1max);
+      mb_size.h_view(m).x1max = SymmetricLeftEdgeX(lx1+1, nmbx1, ms.x1min, ms.x1max);
       mb_bcs.h_view(m,1) = BoundaryFlag::block;
     }
 
@@ -70,7 +70,7 @@ MeshBlock::MeshBlock(MeshBlockPack* ppack, int igids, int nmb) :
         mb_size.h_view(m).x2min = ms.x2min;
         mb_bcs.h_view(m,2) = pm->mesh_bcs[BoundaryFace::inner_x2];
       } else {
-        mb_size.h_view(m).x2min = LeftEdgeX(lx2, nmbx2, ms.x2min, ms.x2max);
+        mb_size.h_view(m).x2min = SymmetricLeftEdgeX(lx2, nmbx2, ms.x2min, ms.x2max);
         mb_bcs.h_view(m,2) = BoundaryFlag::block;
       }
 
@@ -78,7 +78,7 @@ MeshBlock::MeshBlock(MeshBlockPack* ppack, int igids, int nmb) :
         mb_size.h_view(m).x2max = ms.x2max;
         mb_bcs.h_view(m,3) = pm->mesh_bcs[BoundaryFace::outer_x2];
       } else {
-        mb_size.h_view(m).x2max = LeftEdgeX(lx2+1, nmbx2, ms.x2min, ms.x2max);
+        mb_size.h_view(m).x2max = SymmetricLeftEdgeX(lx2+1, nmbx2, ms.x2min, ms.x2max);
         mb_bcs.h_view(m,3) = BoundaryFlag::block;
       }
     }
@@ -97,14 +97,14 @@ MeshBlock::MeshBlock(MeshBlockPack* ppack, int igids, int nmb) :
         mb_size.h_view(m).x3min = ms.x3min;
         mb_bcs.h_view(m,4) = pm->mesh_bcs[BoundaryFace::inner_x3];
       } else {
-        mb_size.h_view(m).x3min = LeftEdgeX(lx3, nmbx3, ms.x3min, ms.x3max);
+        mb_size.h_view(m).x3min = SymmetricLeftEdgeX(lx3, nmbx3, ms.x3min, ms.x3max);
         mb_bcs.h_view(m,4) = BoundaryFlag::block;
       }
       if (lx3 == (nmbx3) - 1) {
         mb_size.h_view(m).x3max = ms.x3max;
         mb_bcs.h_view(m,5) = pm->mesh_bcs[BoundaryFace::outer_x3];
       } else {
-        mb_size.h_view(m).x3max = LeftEdgeX(lx3+1, nmbx3, ms.x3min, ms.x3max);
+        mb_size.h_view(m).x3max = SymmetricLeftEdgeX(lx3+1, nmbx3, ms.x3min, ms.x3max);
         mb_bcs.h_view(m,5) = BoundaryFlag::block;
       }
     }

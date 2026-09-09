@@ -77,6 +77,17 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
   MeshBlockPack *pmbp = pmy_mesh_->pmb_pack;
   auto &size = pmbp->pmb->mb_size;
 
+  // mesh bounds and root-level cell counts, used to place the single-mode perturbation
+  // on coordinates that are bitwise antisymmetric about the mesh center
+  auto &mblev = pmbp->pmb->mb_lev;
+  int root_lev = pmy_mesh_->root_level;
+  int nx1_root = pmy_mesh_->mesh_indcs.nx1;
+  int nx2_root = pmy_mesh_->mesh_indcs.nx2;
+  Real x1min_mesh = pmy_mesh_->mesh_size.x1min;
+  Real x1max_mesh = pmy_mesh_->mesh_size.x1max;
+  Real x2min_mesh = pmy_mesh_->mesh_size.x2min;
+  Real x2max_mesh = pmy_mesh_->mesh_size.x2max;
+
   // Select either Hydro or MHD
   DvceArray5D<Real> u0_;
   Real gm1, p0;
@@ -108,10 +119,11 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
     Kokkos::Random_XorShift64_Pool<> rand_pool64(pmbp->gids);
     par_for("rt2d", DevExeSpace(), 0,(pmbp->nmb_thispack-1),ks,ke,js,je,is,ie,
     KOKKOS_LAMBDA(int m, int k, int j, int i) {
+      // x1 is the direction the mode must stay mirror-symmetric in, so use the
+      // bitwise-antisymmetric form; x2 carries the density jump and needs no symmetry.
       Real &x1min = size.d_view(m).x1min;
-      Real &x1max = size.d_view(m).x1max;
-      int nx1 = indcs.nx1;
-      Real x1v = CellCenterX(i-is, nx1, x1min, x1max);
+      int ntot1 = nx1_root << (mblev.d_view(m) - root_lev);
+      Real x1v = SymmetricCellCenterX(i-is, x1min, x1min_mesh, x1max_mesh, ntot1);
 
       Real &x2min = size.d_view(m).x2min;
       Real &x2max = size.d_view(m).x2max;
@@ -164,15 +176,16 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
     Kokkos::Random_XorShift64_Pool<> rand_pool64(pmbp->gids);
     par_for("rt3d", DevExeSpace(), 0,(pmbp->nmb_thispack-1),ks,ke,js,je,is,ie,
     KOKKOS_LAMBDA(int m, int k, int j, int i) {
+      // x1 and x2 are transverse to gravity and must stay mirror-symmetric, so use the
+      // bitwise-antisymmetric form; x3 carries the density jump and needs no symmetry.
+      int lev = mblev.d_view(m);
       Real &x1min = size.d_view(m).x1min;
-      Real &x1max = size.d_view(m).x1max;
-      int nx1 = indcs.nx1;
-      Real x1v = CellCenterX(i-is, nx1, x1min, x1max);
+      int ntot1 = nx1_root << (lev - root_lev);
+      Real x1v = SymmetricCellCenterX(i-is, x1min, x1min_mesh, x1max_mesh, ntot1);
 
       Real &x2min = size.d_view(m).x2min;
-      Real &x2max = size.d_view(m).x2max;
-      int nx2 = indcs.nx2;
-      Real x2v = CellCenterX(j-js, nx2, x2min, x2max);
+      int ntot2 = nx2_root << (lev - root_lev);
+      Real x2v = SymmetricCellCenterX(j-js, x2min, x2min_mesh, x2max_mesh, ntot2);
 
       Real &x3min = size.d_view(m).x3min;
       Real &x3max = size.d_view(m).x3max;
