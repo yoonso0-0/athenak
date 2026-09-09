@@ -78,7 +78,11 @@ RefinementCriteria::RefinementCriteria(Mesh *pm, ParameterInput *pin) :
         rcrit0.spectral_norm_alpha_coarsen =
             pin->GetReal(it->block_name, "alpha_coarsen");
 
-        rcrit0.dfloor = pin->GetOrAddReal(it->block_name, "dfloor", (-FLT_MAX));
+        rcrit0.dfloor = pin->GetOrAddReal(it->block_name, "dfloor", 0.0);
+        rcrit0.eps_momentum =
+            pin->GetOrAddReal(it->block_name, "eps_momentum", 1.0e-15);
+        rcrit0.eps_magnetic_field =
+            pin->GetOrAddReal(it->block_name, "eps_magnetic_field", 1.0e-15);
 
         rcrit0.monitor_momentum =
             pin->GetBoolean(it->block_name, "monitor_momentum");
@@ -451,6 +455,10 @@ void RefinementCriteria::CheckSpectralNorm(MeshBlockPack *pmbp,
   auto &thres_refine = spectral_norm_refine;
   auto &thres_coarsen = spectral_norm_coarsen;
   auto &dfloor = crit.dfloor;
+  // Denominator floors for the vector-magnitude fields.  Named apart from d4_error's
+  // own eps parameter so the two are not confused at the call sites below.
+  auto &mom_eps = crit.eps_momentum;
+  auto &bfld_eps = crit.eps_magnetic_field;
 
   // Resolve on the host so the inner loop branches on a bool, not an enum.
   const bool use_sum_policy =
@@ -566,7 +574,7 @@ void RefinementCriteria::CheckSpectralNorm(MeshBlockPack *pmbp,
                 cell_error = fmax(cell_error,
                                   d4_error(get_momentum_variable,
                                            get_momentum_variable(k, j, i),
-                                           1e-15, k, j, i));
+                                           mom_eps, k, j, i));
               }
 
               if (monitor_energy) {
@@ -579,7 +587,7 @@ void RefinementCriteria::CheckSpectralNorm(MeshBlockPack *pmbp,
               if (monitor_magnetic_field) {
                 cell_error = fmax(cell_error,
                                   d4_error(get_bfield, get_bfield(k, j, i),
-                                           1e-15, k, j, i));
+                                           bfld_eps, k, j, i));
               }
 
               max_error = fmax(max_error, cell_error);

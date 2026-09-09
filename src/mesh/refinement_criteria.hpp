@@ -60,6 +60,11 @@ struct RefCritData {
   Real spectral_norm_alpha_refine = 0.0;
   Real spectral_norm_alpha_coarsen = 0.0;
   Real dfloor = -(FLT_MAX);
+  // Additive floors on the denominator of the normalized 4th difference, one per
+  // vector-magnitude field so each can be scaled to its own units.  Density is
+  // instead gated by dfloor, and energy is normalized by itself, so both use 0.0.
+  Real eps_momentum = 1.0e-15;
+  Real eps_magnetic_field = 1.0e-15;
   bool monitor_momentum = false;
   bool monitor_energy = false;
   bool monitor_magnetic_field = false;
