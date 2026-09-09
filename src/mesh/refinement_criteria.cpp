@@ -84,6 +84,16 @@ RefinementCriteria::RefinementCriteria(Mesh *pm, ParameterInput *pin) :
         rcrit0.eps_magnetic_field =
             pin->GetOrAddReal(it->block_name, "eps_magnetic_field", 1.0e-15);
 
+        // Restrict refinement to a sphere about the origin.  The radius is only
+        // meaningful with the switch on, so read it only then: an input that turns
+        // the region on is then required to say how big it is.
+        rcrit0.spectral_norm_use_radius =
+            pin->GetOrAddBoolean(it->block_name, "use_refinement_radius", false);
+        if (rcrit0.spectral_norm_use_radius) {
+          rcrit0.spectral_norm_radius =
+              pin->GetReal(it->block_name, "refinement_radius");
+        }
+
         rcrit0.monitor_momentum =
             pin->GetBoolean(it->block_name, "monitor_momentum");
         rcrit0.monitor_energy =
@@ -478,6 +488,14 @@ void RefinementCriteria::CheckSpectralNorm(MeshBlockPack *pmbp,
   auto &mblev = pmbp->pmb->mb_lev;
   const int root_level = pmbp->pmesh->root_level;
 
+  // Optional region of interest, centred on the coordinate origin.  Off by default, so
+  // the whole domain is monitored -- what every existing input gets.  Compared as
+  // squared distances to keep a sqrt out of the innermost loop.
+  const bool use_radius = crit.spectral_norm_use_radius;
+  const Real radius_sq = SQR(crit.spectral_norm_radius);
+
+  auto &size = pmbp->pmb->mb_size;
+
   par_for_outer(
       "SpectralNorm", DevExeSpace(), 0, 0, 0, (nmb - 1),
       KOKKOS_LAMBDA(TeamMember_t tmember, const int m) {
@@ -485,6 +503,53 @@ void RefinementCriteria::CheckSpectralNorm(MeshBlockPack *pmbp,
         int &flag = refine_flag.d_view(m + mbs);
 
         const int grid_level = mblev.d_view(m) - root_level;
+
+        // Region gate.  The MeshBlock is the unit of refinement, so it is also the
+        // unit of the region test: a block lying entirely outside the sphere never has
+        // its solution examined at all.  Skipping before the reduction rather than
+        // gating cell by cell also means every block that does run reduces over all of
+        // its cells, so the reduction can never come back empty and hand the
+        // Kokkos::Max identity (-DBL_MAX) to the coarsen test below.
+        //
+        // Squared distance from the origin to the block's bounding box: per axis that is
+        // zero when the box straddles the origin, else the nearer face.  Mirror blocks
+        // carry exactly negated bounds (see SymmetricLeftEdgeX in meshblock.cpp), so the
+        // test is bitwise identical under reflection.
+        if (use_radius) {
+          const Real &x1min = size.d_view(m).x1min;
+          const Real &x1max = size.d_view(m).x1max;
+          Real d1 = (x1min > 0.0) ? x1min : ((x1max < 0.0) ? -x1max : 0.0);
+          Real dist_sq = SQR(d1);
+          if (multi_d) {
+            const Real &x2min = size.d_view(m).x2min;
+            const Real &x2max = size.d_view(m).x2max;
+            Real d2 = (x2min > 0.0) ? x2min : ((x2max < 0.0) ? -x2max : 0.0);
+            dist_sq += SQR(d2);
+          }
+          if (three_d) {
+            const Real &x3min = size.d_view(m).x3min;
+            const Real &x3max = size.d_view(m).x3max;
+            Real d3 = (x3min > 0.0) ? x3min : ((x3max < 0.0) ? -x3max : 0.0);
+            dist_sq += SQR(d3);
+          }
+          if (dist_sq > radius_sq) {
+            // Outside the region the criterion never refines, but it does keep asking
+            // for derefinement, so the mesh does not accumulate blocks out here.  What
+            // survives is then exactly the refinement 2:1 nesting demands and nothing
+            // more: MeshBlockTree::Derefine vetoes any derefinement that would open a
+            // two-level jump, so a nesting collar shrinks back on its own once the
+            // interior no longer needs it.  Asking unconditionally is deliberate --
+            // out here the solution is not monitored, so there is no error to test
+            // against thres_coarsen, and no reduction is run.
+            //
+            // Guarded on flag == 0 exactly like the derefinement below, so a decision
+            // another criterion already made still wins.
+            Kokkos::single(Kokkos::PerTeam(tmember), [&]() {
+              if (flag == 0) { flag = -1; }
+            });
+            return;
+          }
+        }
 
         // Per-cell accessors.  All read var, so they follow use_primitives
         // together.  Magnitudes sum all three components regardless of
@@ -543,7 +608,7 @@ void RefinementCriteria::CheckSpectralNorm(MeshBlockPack *pmbp,
           }
 
           // Normalize
-          return abs_d4u / (c_val + eps);
+          return abs_d4u / (fabs(c_val) + eps);
         };
         // -------------------------------------------------------------------
 

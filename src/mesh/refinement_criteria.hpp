@@ -65,6 +65,14 @@ struct RefCritData {
   // instead gated by dfloor, and energy is normalized by itself, so both use 0.0.
   Real eps_momentum = 1.0e-15;
   Real eps_magnetic_field = 1.0e-15;
+  // Optional region of interest: a sphere about the origin (a cylinder about the
+  // x3-axis in 2D).  A block overlapping it is tested in full; a block lying entirely
+  // outside it is never refined by this criterion but is still flagged for
+  // derefinement, so that a 2:1 nesting collar relaxes once the interior stops needing
+  // it.  Off by default, leaving the whole domain monitored; the radius is read from
+  // the input only when the switch is on.
+  bool spectral_norm_use_radius = false;
+  Real spectral_norm_radius = 0.0;
   bool monitor_momentum = false;
   bool monitor_energy = false;
   bool monitor_magnetic_field = false;
