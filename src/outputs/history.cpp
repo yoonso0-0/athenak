@@ -32,8 +32,20 @@ HistoryOutput::HistoryOutput(ParameterInput *pin, Mesh *pm, OutputParameters op)
   // cycle through physics modules and add HistoryData struct for each
   hist_data.clear();
 
+  // one UserDefined entry per file tag, or a single untagged one
+  auto add_user_hist = [&]() {
+    auto &tags = pm->pgen->user_hist_tags;
+    if (tags.empty()) {
+      hist_data.emplace_back(PhysicsModule::UserDefined);
+    } else {
+      for (int n=0; n<static_cast<int>(tags.size()); ++n) {
+        hist_data.emplace_back(PhysicsModule::UserDefined, n, tags[n]);
+      }
+    }
+  };
+
   if (pm->pgen->user_hist && op.user_hist_only) {
-    hist_data.emplace_back(PhysicsModule::UserDefined);
+    add_user_hist();
   } else {
     if (pm->pmb_pack->phydro != nullptr) {
       hist_data.emplace_back(PhysicsModule::HydroDynamics);
@@ -42,7 +54,7 @@ HistoryOutput::HistoryOutput(ParameterInput *pin, Mesh *pm, OutputParameters op)
       hist_data.emplace_back(PhysicsModule::MagnetoHydroDynamics);
     }
     if (pm->pgen->user_hist) {
-      hist_data.emplace_back(PhysicsModule::UserDefined);
+      add_user_hist();
     }
   }
 
@@ -409,6 +421,7 @@ void HistoryOutput::WriteOutputFile(Mesh *pm, ParameterInput *pin) {
           fname.append(".z4c");
         case PhysicsModule::UserDefined:
           fname.append(".user");
+          if (!data.user_tag.empty()) fname.append("." + data.user_tag);
           break;
         default:
           break;

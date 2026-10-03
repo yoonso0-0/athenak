@@ -10,6 +10,7 @@
 
 #include <functional>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "geodesic-grid/spherical_grid.hpp"
@@ -41,6 +42,11 @@ class ProblemGenerator {
 
   // true if user history outputs are specified
   bool user_hist;
+
+  // optional file tags for user history outputs: if nonempty, user_hist_func is called
+  // once per tag (HistoryData::user_index = position in this vector) and each call is
+  // written to its own file <basename>.user.<tag>.hst
+  std::vector<std::string> user_hist_tags;
 
   // vector of SphericalGrid objects for analysis
   std::vector<std::unique_ptr<SphericalGrid>> spherical_grids;
