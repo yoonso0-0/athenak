@@ -94,6 +94,27 @@ void SphericalGrid::SetInterpolationCoordinates() {
 }
 
 //----------------------------------------------------------------------------------------
+//! \fn void SphericalGrid::FoldInterpolationCoordinates
+//! \brief reflect interpolation points through coordinate planes (see header) and
+//         recompute the interpolation indices and weights
+
+void SphericalGrid::FoldInterpolationCoordinates(const int fold[3]) {
+  for (int n=0; n<nangles; ++n) {
+    for (int d=0; d<3; ++d) {
+      if (fold[d] != 0) {
+        interp_coord.h_view(n,d) = fold[d]*fabs(interp_coord.h_view(n,d));
+      }
+    }
+  }
+  interp_coord.template modify<HostMemSpace>();
+  interp_coord.template sync<DevExeSpace>();
+
+  SetInterpolationIndices();
+  SetInterpolationWeights();
+  return;
+}
+
+//----------------------------------------------------------------------------------------
 //! \fn void SphericalGrid::SetInterpolationIndices
 //! \brief determine which MeshBlocks and MeshBlock zones therein will be used in
 //         interpolation onto the sphere
