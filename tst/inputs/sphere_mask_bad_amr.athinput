@@ -1,0 +1,92 @@
+# AthenaK input file: spherical inner mask (Dirichlet) test, 2D
+# Based on the Liska & Wendroff implosion test (converging shock toward the corner at the
+# origin). A spherical mask of radius <sphere_mask>/radius, centered at the origin, is
+# used to emulate an effective Dirichlet boundary condition at r=radius: every cell with
+# r < radius is pinned every stage to the fixed state below, regardless of the exterior
+# shock dynamics.
+
+<comment>
+problem   = spherical inner mask (Dirichlet) regression test
+
+<job>
+basename  = SphereMaskBadAmr
+
+<mesh>
+nghost    = 2          # Number of ghost cells
+nx1       = 64         # Number of zones in X1-direction
+x1min     = 0.0        # minimum value of X1
+x1max     = 0.3        # maximum value of X1
+ix1_bc    = reflect    # inner-X1 boundary flag
+ox1_bc    = reflect    # outer-X1 boundary flag
+
+nx2       = 64         # Number of zones in X2-direction
+x2min     = 0.0        # minimum value of X2
+x2max     = 0.3        # maximum value of X2
+ix2_bc    = reflect    # inner-X2 boundary flag
+ox2_bc    = reflect    # outer-X2 boundary flag
+
+nx3       = 1          # Number of zones in X3-direction
+x3min     = -0.5       # minimum value of X3
+x3max     = 0.5        # maximum value of X3
+ix3_bc    = periodic   # inner-X3 boundary flag
+ox3_bc    = periodic   # outer-X3 boundary flag
+
+<meshblock>
+nx1       = 8
+nx2       = 8
+nx3       = 1
+
+<mesh_refinement>
+refinement = adaptive
+num_levels = 2
+refinement_interval = 3
+max_nmb_per_rank = 64
+
+<amr_criterion0>
+method = slope
+variable = hydro_w_d
+value_max = 0.1
+
+<time>
+evolution  = dynamic    # dynamic/kinematic/static
+integrator = rk2        # time integration algorithm
+cfl_number = 0.4        # The Courant, Friedrichs, & Lewy (CFL) Number
+nlim       = -1         # cycle limit
+tlim       = 0.15       # time limit
+ndiag      = 200        # cycles between diagostic output
+
+<hydro>
+eos         = ideal     # EOS type
+reconstruct = plm       # spatial reconstruction method
+rsolver     = llf       # Riemann-solver to be used
+gamma       = 1.4       # gamma = C_p/C_v
+
+<problem>
+pgen_name = implode     # problem generator name
+# Interior Conditions (near the origin)
+d_in  = 0.125           # density
+p_in  = 0.14            # pressure
+
+# Exterior Conditions
+d_out  = 1.0            # density
+p_out  = 1.0            # pressure
+
+<sphere_mask>
+enabled   = true
+radius    = 0.03        # 2*radius=0.06 << domain size=0.3 (single MeshBlock)
+bc        = dirichlet
+dens      = 2.0
+vel1      = 0.0
+vel2      = 0.0
+vel3      = 0.0
+eint      = 20.0
+
+<output1>
+file_type   = hst       # history data dump
+data_format = %12.5e    # optional data format string
+dt          = 0.03      # time increment between outputs
+
+<output2>
+file_type  = vtk        # legacy VTK output
+variable   = hydro_w    # variables to be output
+dt         = 0.03       # time increment between outputs
