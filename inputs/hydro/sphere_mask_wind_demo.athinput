@@ -1,0 +1,99 @@
+# AthenaK input file: spherical inner mask (Spherical Wind) demo, 2D
+#
+# Unlike the implosion demo, this one does NOT use the Liska & Wendroff implosion
+# pgen. It repurposes the spherical blast-wave pgen (src/pgen/fluids/blast.cpp)
+# purely as a convenient way to set up a uniform ambient medium at rest: outer_radius is
+# set smaller than <sphere_mask>/radius, so the blast's own high-pressure region (r <
+# outer_radius) is entirely inside the masked sphere and gets overwritten every stage
+# (including at t=0, before the first output -- see driver.cpp) before it can ever affect
+# the exterior flow. What actually drives the dynamics is the spherical_wind BC itself:
+# the interior dens/eint are set equal to the ambient state (dens=1.0, eint=2.5, i.e.
+# p=1.0), so density and pressure are continuous across r=radius -- the only thing that
+# distinguishes the interior from the ambient medium is the imposed radial velocity.
+# vel_r=+1.0 (subsonic relative to the ambient sound speed ~1.18, Mach~0.85) launches
+# that fixed-density, fixed-pressure state radially outward from the sphere boundary
+# into the quiescent ambient medium. This is a piston problem: any r=radius boundary
+# advancing outward into gas at rest compresses it and eventually shocks, regardless of
+# vel_r vs. the far-field ambient sound speed -- so a (weaker, more gradual) forward
+# shock still forms here, just less abruptly than the supersonic vel_r=+-3.0 cases.
+# Run as written it is the outward wind; the inward accretion case is the same input with
+# the override sphere_mask/vel_r=-1.0 (tst/sphere_mask_demo/run_demo.py runs both).
+#
+# Requires the build_blast executable (cmake -S . -B build_blast -D PROBLEM=fluids/blast
+# -D Athena_ENABLE_MPI=OFF -D Athena_ENABLE_OPENMP=OFF), since blast.cpp is a
+# UserProblem-only pgen not compiled into the built_in_pgens binary used by the other
+# implosion demo.
+
+<comment>
+problem   = spherical inner mask (Spherical Wind) demo, 2D
+
+<job>
+basename  = SphereMaskWindDemo
+
+<mesh>
+nghost    = 3          # Number of ghost cells (ppm4 needs >= 3)
+nx1       = 256        # Number of zones in X1-direction
+x1min     = -0.4       # minimum value of X1
+x1max     = 0.4        # maximum value of X1
+ix1_bc    = reflect    # inner-X1 boundary flag
+ox1_bc    = reflect    # outer-X1 boundary flag
+
+nx2       = 256        # Number of zones in X2-direction
+x2min     = -0.4       # minimum value of X2
+x2max     = 0.4        # maximum value of X2
+ix2_bc    = reflect    # inner-X2 boundary flag
+ox2_bc    = reflect    # outer-X2 boundary flag
+
+nx3       = 1          # Number of zones in X3-direction
+x3min     = -0.5       # minimum value of X3
+x3max     = 0.5        # maximum value of X3
+ix3_bc    = periodic   # inner-X3 boundary flag
+ox3_bc    = periodic   # outer-X3 boundary flag
+
+<meshblock>
+nx1       = 256        # single MeshBlock spans the full symmetric domain
+nx2       = 256
+nx3       = 1
+
+<time>
+evolution  = dynamic    # dynamic/kinematic/static
+integrator = rk2        # time integration algorithm
+cfl_number = 0.4        # The Courant, Friedrichs, & Lewy (CFL) Number
+nlim       = -1         # cycle limit
+tlim       = 0.3        # time limit
+ndiag      = 200        # cycles between diagostic output
+
+<hydro>
+eos         = ideal     # EOS type
+reconstruct = ppm4      # spatial reconstruction method
+rsolver     = hllc      # Riemann-solver to be used
+gamma       = 1.4       # gamma = C_p/C_v
+
+<problem>
+# Ambient medium (uniform, at rest, everywhere r >= outer_radius)
+dn_amb       = 1.0      # ambient density
+pn_amb       = 1.0      # ambient pressure -> sound speed ~1.18
+# Blast's own perturbed region -- irrelevant here: fully inside the sphere_mask radius
+# (0.05), so it is overwritten by MaskSphere before it ever reaches the exterior flow.
+drat         = 1.0
+prat         = 1.0
+outer_radius = 0.03     # < sphere_mask radius (0.05): entirely swallowed by the mask
+inner_radius = 0.015    # rin = outer_radius - inner_radius = 0.015
+
+<sphere_mask>
+enabled   = true
+radius    = 0.05        # 2*radius+margin=0.103 << half-domain=0.4 (single MeshBlock)
+bc        = spherical_wind
+dens      = 1.0         # matches the ambient density (dn_amb)
+eint      = 2.5         # matches the ambient pressure: p = eint*(gamma-1) = 1.0
+vel_r     = 1.0         # outward wind, subsonic relative to ambient cs~1.18
+
+<output1>
+file_type   = hst       # history data dump
+data_format = %12.5e    # optional data format string
+dt          = 0.01      # time increment between outputs
+
+<output2>
+file_type  = bin        # AthenaK native binary dump
+variable   = hydro_w    # variables to be output
+dt         = 0.01       # time increment between outputs
