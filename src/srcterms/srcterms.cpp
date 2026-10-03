@@ -10,6 +10,7 @@
 
 #include "srcterms.hpp"
 
+#include <cmath>
 #include <iostream>
 #include <string> // string
 
@@ -42,6 +43,11 @@ SourceTerms::SourceTerms(std::string block, MeshBlockPack *pp, ParameterInput *p
   rel_cooling = pin->GetOrAddBoolean(block, "rel_cooling", false);
   rad_beam = pin->GetOrAddBoolean(block, "rad_beam", false);
   self_gravity = pin->GetOrAddBoolean(block, "self_gravity", false);
+
+  // @YK
+  point_particle_gravity_at_center =
+      pin->GetOrAddBoolean(block, "point_particle_gravity_at_center", false);
+  softening_length = pin->GetReal(block, "gravity_softening_length");
 
   // (1) read data for (constant) gravitational acceleration
   if (const_accel) {
@@ -97,6 +103,10 @@ void SourceTerms::ApplySrcTerms(const DvceArray5D<Real> &w0, const EOS_Data &eos
   if (ism_cooling) ISMCooling(w0, eos_data, bdt, u0);
   if (rel_cooling) RelCooling(w0, eos_data, bdt, u0);
   if (self_gravity) SelfGravity(w0, eos_data, bdt, u0);
+
+  // @YK
+  if (point_particle_gravity_at_center) PointParticleGravity(w0, eos_data, bdt, u0);
+
   return;
 }
 
@@ -303,6 +313,102 @@ void SourceTerms::SelfGravity(const DvceArray5D<Real> &w0, const EOS_Data &eos_d
   }
 
   return;
+}
+
+//
+// @YK: point-particle gravity
+//
+//
+void SourceTerms::PointParticleGravity(const DvceArray5D<Real> &w0,
+                                       const EOS_Data &eos_data, const Real bdt,
+                                       DvceArray5D<Real> &u0) {
+  auto &indcs = pmy_pack->pmesh->mb_indcs;
+  int is = indcs.is, ie = indcs.ie;
+  int js = indcs.js, je = indcs.je;
+  int ks = indcs.ks, ke = indcs.ke;
+  int nmb1 = (pmy_pack->nmb_thispack - 1);
+
+  auto &size = pmy_pack->pmb->mb_size;
+
+  // Point-mass gravity with cubic-spline (Gadget) softening. The per-cell
+  // force factor is the analytic gradient of the softened potential kernel
+  // divided by radius (a = softened_force_factor * x). All radius-independent
+  // coefficients depend only on the softening length h, so precompute them
+  // here, outside the kernel.
+  const Real h = softening_length;
+  const Real h_over_2 = 0.5 * h;
+
+  const Real one_over_h = 1.0 / h;
+  const Real one_over_h3 = one_over_h * one_over_h * one_over_h;
+  const Real one_over_h4 = one_over_h3 * one_over_h;
+  const Real one_over_h5 = one_over_h4 * one_over_h;
+  const Real one_over_h6 = one_over_h5 * one_over_h;
+
+  // r < h/2 :  a1_0 + a1_2 r^2 + a1_3 r^3
+  const Real a1_0 = -(32. / 3) * one_over_h3;
+  const Real a1_2 = (192. / 5) * one_over_h5;
+  const Real a1_3 = -32. * one_over_h6;
+
+  // h/2 <= r < h :  (1/15)/r^3 + b2_0 + b2_1 r + b2_2 r^2 + b2_3 r^3
+  const Real b2_0 = -(64. / 3) * one_over_h3;
+  const Real b2_1 = 48. * one_over_h4;
+  const Real b2_2 = -(192. / 5) * one_over_h5;
+  const Real b2_3 = (32. / 3) * one_over_h6;
+
+  par_for(
+      "point_particle_gravity", DevExeSpace(), 0, nmb1, ks, ke, js, je, is, ie,
+      KOKKOS_LAMBDA(int m, int k, int j, int i) {
+        Real &x1min = size.d_view(m).x1min;
+        Real &x1max = size.d_view(m).x1max;
+        const Real x1v = CellCenterX(i - is, indcs.nx1, x1min, x1max);
+
+        Real &x2min = size.d_view(m).x2min;
+        Real &x2max = size.d_view(m).x2max;
+        const Real x2v = CellCenterX(j - js, indcs.nx2, x2min, x2max);
+
+        Real &x3min = size.d_view(m).x3min;
+        Real &x3max = size.d_view(m).x3max;
+        const Real x3v = CellCenterX(k - ks, indcs.nx3, x3min, x3max);
+
+        const Real radius = std::sqrt(x1v * x1v + x2v * x2v + x3v * x3v);
+
+        Real softened_force_factor;
+
+        if (radius >= h) {
+          const Real inv_r = 1.0 / radius;
+          softened_force_factor = -inv_r * inv_r * inv_r;
+        } else if (radius < h_over_2) {
+          // Horner: a1_0 + r^2 (a1_2 + a1_3 r)
+          const Real r2 = radius * radius;
+          softened_force_factor = a1_0 + r2 * (a1_2 + a1_3 * radius);
+        } else {
+          // Horner: (1/15)/r^3 + b2_0 + r (b2_1 + r (b2_2 + b2_3 r))
+          const Real inv_r = 1.0 / radius;
+          const Real inv_r3 = inv_r * inv_r * inv_r;
+          softened_force_factor =
+              (1. / 15) * inv_r3 +
+              b2_0 + radius * (b2_1 + radius * (b2_2 + b2_3 * radius));
+        }
+
+        // Pre-calculate source multipliers to eliminate redundant array
+        // reads/math
+        const Real dt_src = bdt * softened_force_factor;
+
+        // Update Conserved Variables.  The energy source term uses the
+        // pre-update momenta, so it must come first.  IEN only exists for an
+        // ideal EOS (isothermal hydro/MHD has no energy variable).
+        if (eos_data.is_ideal) {
+          u0(m, IEN, k, j, i) +=
+              dt_src * (u0(m, IM1, k, j, i) * x1v + u0(m, IM2, k, j, i) * x2v +
+                        u0(m, IM3, k, j, i) * x3v);
+        }
+
+        const Real dt_rho_src = dt_src * w0(m, IDN, k, j, i);
+
+        u0(m, IM1, k, j, i) += dt_rho_src * x1v;
+        u0(m, IM2, k, j, i) += dt_rho_src * x2v;
+        u0(m, IM3, k, j, i) += dt_rho_src * x3v;
+      });
 }
 
 //----------------------------------------------------------------------------------------
