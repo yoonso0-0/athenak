@@ -1,0 +1,91 @@
+# AthenaK input file: 3D Bondi-Hoyle-Lyttleton wind tunnel, ideal EOS
+#
+# A uniform Mach-2 wind blows along +x1 past the GM=1 point mass from
+# <hydro_srcterms>/point_particle_gravity_at_center, with the singular center replaced by
+# an absorbing <sphere_mask>. Gravity focuses the flow onto the downstream axis, where it
+# shocks; evolve until the wake settles (tlim = two flow-through times). There is no
+# analytic solution, so no error output is produced.
+#
+# Scales (GM=1, dens_inf=1, cs_inf=1, mach_inf=2):
+#   accretion radius   r_acc = 2GM/(v^2 + cs^2)               = 0.4
+#   Bondi-Hoyle rate   Mdot  = 4 pi (GM)^2 rho/(v^2+cs^2)^1.5 = 1.124
+#   Hoyle-Lyttleton    Mdot  = 4 pi (GM)^2 rho/v^3            = 1.571
+# A measured rate should lie between the two. The mask is a boundary condition, not a
+# sink, so measure the rate as an inward flux through a shell outside it. Here
+# r_mask = 0.25 r_acc is large enough to affect the answer: this is a feature test, not a
+# converged BHL calculation.
+#
+# Mesh: one MeshBlock holds the whole domain (an absorbing mask needs each block holding
+# masked cells to reach 2*radius+margin from the origin). To run cheaper, halve nx1/nx2/nx3
+# and raise <sphere_mask>/radius and gravity_softening_length to 0.15; to refine, double
+# the nx and halve both lengths to 0.05.
+
+<comment>
+problem   = 3D BHL wind tunnel: uniform Mach-2 wind past a masked GM=1 point mass
+
+<job>
+basename  = BHLWindTunnel3D
+
+<mesh>
+nghost    = 3          # Number of ghost cells (3 required by ppm4)
+nx1       = 160        # Number of zones in X1-direction (dx = 0.025)
+x1min     = -1.0       # minimum value of X1: 2.5 accretion radii upstream
+x1max     = 3.0        # maximum value of X1: 7.5 accretion radii of wake
+ix1_bc    = user       # upstream face: held at the uniform wind state
+ox1_bc    = outflow    # downstream face: the wake must be able to leave
+
+nx2       = 80         # Number of zones in X2-direction (dx = 0.025)
+x2min     = -1.0       # minimum value of X2
+x2max     = 1.0        # maximum value of X2
+ix2_bc    = outflow    # transverse faces: 'user' would also be valid here
+ox2_bc    = outflow
+
+nx3       = 80         # Number of zones in X3-direction (dx = 0.025)
+x3min     = -1.0       # minimum value of X3
+x3max     = 1.0        # maximum value of X3
+ix3_bc    = outflow
+ox3_bc    = outflow
+
+<meshblock>
+nx1       = 160        # single MeshBlock spans the full domain
+nx2       = 80
+nx3       = 80
+
+<time>
+evolution  = dynamic    # dynamic/kinematic/static
+integrator = rk2        # time integration algorithm
+cfl_number = 0.3        # The Courant, Friedrichs, & Lewy (CFL) Number
+nlim       = -1         # cycle limit
+tlim       = 4.0        # time limit: two flow-through times
+ndiag      = 200        # cycles between diagostic output
+
+<hydro>
+eos         = ideal     # EOS type
+reconstruct = ppm4      # spatial reconstruction method
+rsolver     = hllc      # Riemann-solver to be used
+gamma       = 1.666666666667 # gamma = C_p/C_v (no upper bound for this problem)
+
+<hydro_srcterms>
+point_particle_gravity_at_center = true   # GM=1 point mass at the coordinate origin
+gravity_softening_length         = 0.1    # equals the sphere_mask radius below
+
+<problem>
+pgen_name = bhl_wind_tunnel
+dens_inf  = 1.0         # upstream density
+cs_inf    = 1.0         # upstream sound speed
+mach_inf  = 2.0         # upstream Mach number; sets vel_inf = mach_inf*cs_inf
+
+<sphere_mask>
+enabled   = true
+radius    = 0.1         # mask radius, 0.25 of the accretion radius 0.4
+bc        = absorbing   # inner BC, not a mass sink; bc=reflecting gives a solid body
+
+<output1>
+file_type   = hst       # history data dump
+data_format = %12.5e    # optional data format string
+dt          = 0.05      # time increment between outputs
+
+<output2>
+file_type  = bin        # AthenaK native binary dump
+variable   = hydro_w    # variables to be output
+dt         = 0.2        # time increment between outputs
