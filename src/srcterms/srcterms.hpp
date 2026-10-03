@@ -36,6 +36,9 @@ class SourceTerms {
   bool rad_beam;
   bool self_gravity;
 
+  // @YK
+  bool point_particle_gravity_at_center;
+
   // new timestep
   Real dtnew;
 
@@ -56,6 +59,10 @@ class SourceTerms {
   Real dir1, dir2, dir3;  // direction of source
   Real width, spread;     // spatial width of source region, spread in angles
 
+  // @YK: data for point-particle gravity
+  Real softening_length = 0.0;  // read only if point_particle_gravity_at_center
+  Real point_particle_gm = 1.0;  // GM of the point mass; zero turns the force off
+
   // functions
   void ApplySrcTerms(const DvceArray5D<Real> &w0, const EOS_Data &eos,
                      const Real bdt, DvceArray5D<Real> &u0);
@@ -70,6 +77,9 @@ class SourceTerms {
                    const Real bdt, DvceArray5D<Real> &u0);
   void BeamSource(DvceArray5D<Real> &i0, const Real bdt);
   void NewTimeStep(const DvceArray5D<Real> &w0, const EOS_Data &eos);
+
+  void PointParticleGravity(const DvceArray5D<Real> &w0, const EOS_Data &eos,
+                            const Real bdt, DvceArray5D<Real> &u0);
 
  private:
   MeshBlockPack *pmy_pack;
