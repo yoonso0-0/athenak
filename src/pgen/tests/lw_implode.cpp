@@ -38,6 +38,22 @@ void ProblemGenerator::LWImplode(ParameterInput *pin, const bool restart) {
   Real d_out = pin->GetReal("problem","d_out");
   Real p_out = pin->GetReal("problem","p_out");
 
+  // Optional test mode: replace the diagonal implosion with a spherical jump centered
+  // at the origin.  This supplies genuinely reflection-symmetric, nonuniform data for
+  // full-domain versus symmetry-reduced sphere-mask regression tests in both 2D and 3D.
+  Real radial_jump_radius =
+      pin->GetOrAddReal("problem", "radial_jump_radius", -1.0);
+
+  // Optional test hook: replace only a sphere about the origin while leaving its
+  // exterior unchanged. Sphere-mask tests use this to verify that mirror BCs are
+  // independent of the disposable state inside the mask.
+  Real sphere_override_radius =
+      pin->GetOrAddReal("problem", "sphere_override_radius", -1.0);
+  Real sphere_override_dens =
+      pin->GetOrAddReal("problem", "sphere_override_dens", d_in);
+  Real sphere_override_pres =
+      pin->GetOrAddReal("problem", "sphere_override_pres", p_in);
+
   // capture variables for kernel
   Real gm1 = pmbp->phydro->peos->eos_data.gamma - 1.0;
   auto &indcs = pmy_mesh_->mb_indcs;
@@ -72,7 +88,19 @@ void ProblemGenerator::LWImplode(ParameterInput *pin, const bool restart) {
     int nx2 = indcs.nx2;
     Real x2v = CellCenterX(j-js, nx2, x2min, x2max);
 
-    if (x2v > (y0 - x1v)) {
+    Real &x3min = size.d_view(m).x3min;
+    Real &x3max = size.d_view(m).x3max;
+    int nx3 = indcs.nx3;
+    Real x3v = CellCenterX(k-ks, nx3, x3min, x3max);
+
+    bool use_outer_state;
+    if (radial_jump_radius > 0.0) {
+      use_outer_state =
+          x1v*x1v + x2v*x2v + x3v*x3v > radial_jump_radius*radial_jump_radius;
+    } else {
+      use_outer_state = x2v > (y0 - x1v);
+    }
+    if (use_outer_state) {
       u0(m,IDN,k,j,i) = d_out;
       u0(m,IEN,k,j,i) = p_out/gm1;
       if (nscalars > 0) u0(m,nhydro,k,j,i) = 0.0;
@@ -80,6 +108,12 @@ void ProblemGenerator::LWImplode(ParameterInput *pin, const bool restart) {
       u0(m,IDN,k,j,i) = d_in;
       u0(m,IEN,k,j,i) = p_in/gm1;
       if (nscalars > 0) u0(m,nhydro,k,j,i) = d_in;
+    }
+    if (sphere_override_radius > 0.0 &&
+        x1v*x1v + x2v*x2v < sphere_override_radius*sphere_override_radius) {
+      u0(m,IDN,k,j,i) = sphere_override_dens;
+      u0(m,IEN,k,j,i) = sphere_override_pres/gm1;
+      if (nscalars > 0) u0(m,nhydro,k,j,i) = sphere_override_dens;
     }
   });
 
