@@ -136,6 +136,7 @@ add_executable(
 
         pgen/pgen.cpp
         pgen/tests/advection.cpp
+        pgen/tests/bhl_wind_tunnel.cpp
         pgen/tests/cpaw.cpp
         pgen/tests/cshock.cpp
         pgen/tests/divb_amr.cpp
