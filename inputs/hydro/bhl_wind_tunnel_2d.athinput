@@ -17,8 +17,8 @@
 #    not reliably physical. Check the far-wall breach time using row [-1] only; row [0] is
 #    the reflect boundary.
 #  - ix1_bc = user clamps all upstream fields and ox1_bc = outflow assumes every
-#    characteristic exits, so both are valid only for supersonic flow. With mach_inf < 1
-#    expect spurious standing waves and drift.
+#    characteristic exits, so both are valid only for supersonic flow. With vel_inf <
+#    cs_inf expect spurious standing waves and drift.
 #
 # Mesh: a single MeshBlock spans the domain. spherical_wind places no constraint on the
 # block layout, but the origin lies on the ix2 boundary of this half-plane.
@@ -86,7 +86,7 @@ gravity_softening_length         = 1.0    # equals the mask radius, so the field
 pgen_name = bhl_wind_tunnel
 dens_inf  = 1.0        # upstream density
 cs_inf    = 0.3        # upstream sound speed
-mach_inf  = 2          # upstream Mach number -> vel_inf = 0.6, SUPERSONIC wind
+vel_inf   = 0.6        # upstream speed, Mach 2: SUPERSONIC wind
 
 <sphere_mask>
 enabled   = true

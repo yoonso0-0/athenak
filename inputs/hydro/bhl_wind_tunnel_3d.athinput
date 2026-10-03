@@ -6,7 +6,7 @@
 # shocks; evolve until the wake settles (tlim = two flow-through times). There is no
 # analytic solution, so no error output is produced.
 #
-# Scales (GM=1, dens_inf=1, cs_inf=1, mach_inf=2):
+# Scales (GM=1, dens_inf=1, cs_inf=1, vel_inf=2):
 #   accretion radius   r_acc = 2GM/(v^2 + cs^2)               = 0.4
 #   Bondi-Hoyle rate   Mdot  = 4 pi (GM)^2 rho/(v^2+cs^2)^1.5 = 1.124
 #   Hoyle-Lyttleton    Mdot  = 4 pi (GM)^2 rho/v^3            = 1.571
@@ -73,7 +73,7 @@ gravity_softening_length         = 0.1    # equals the sphere_mask radius below
 pgen_name = bhl_wind_tunnel
 dens_inf  = 1.0         # upstream density
 cs_inf    = 1.0         # upstream sound speed
-mach_inf  = 2.0         # upstream Mach number; sets vel_inf = mach_inf*cs_inf
+vel_inf   = 2.0         # upstream speed (Mach 2 for cs_inf = 1)
 
 <sphere_mask>
 enabled   = true
