@@ -188,8 +188,11 @@ struct HistoryData {
   std::string label[NHISTORY_VARIABLES];
   Real hdata[NHISTORY_VARIABLES];
   bool header_written;
+  int user_index;         // UserDefined only: position of this file among the user files
+  std::string user_tag;   // UserDefined only: file name suffix, ".user.<tag>.hst" if set
   // constructor
-  explicit HistoryData(PhysicsModule name) : physics(name), header_written(false) {}
+  explicit HistoryData(PhysicsModule name, int index=0, const std::string &tag="") :
+      physics(name), header_written(false), user_index(index), user_tag(tag) {}
 };
 
 //----------------------------------------------------------------------------------------
