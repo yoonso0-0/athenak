@@ -24,3 +24,7 @@ Lorene
 
 # python cache
 __pycache__/
+
+# sphere_mask demo run output
+tst/sphere_mask_demo/output*/
+tst/sphere_mask_demo/*.mp4
