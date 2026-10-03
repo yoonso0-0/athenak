@@ -329,6 +329,20 @@ Hydro::Hydro(MeshBlockPack *ppack, ParameterInput *pin) :
       // cell range (including ghost zones) in every dimension.
       Kokkos::realloc(wl3d, nmb, (nhydro+nscalars), ncells3, ncells2, ncells1);
       Kokkos::realloc(wr3d, nmb, (nhydro+nscalars), ncells3, ncells2, ncells1);
+
+      // allocate array of flags used with FOFC.  Both fofc and utest are constructed at
+      // size 1 in the member initializer list, so without this they stay 1x1x1x1x1 and
+      // every FOFC access in hydro_fofc.cpp runs off the end of an 8-byte allocation.
+      // MHD has always done this (see mhd.cpp); hydro was missing it.
+      // utest is sized nhydro, not nhydro+nscalars: hydro's FOFC only ever fills the
+      // nhydro fluid slots, and it calls ConsToPrim() with only_testfloors = true, which
+      // returns before that function's passive-scalar loop.  (MHD widens utest to
+      // nmhd+nscalars only for dyn-GR, whose FOFC really does write scalar slots.)
+      if (use_fofc) {
+        Kokkos::realloc(fofc,  nmb, ncells3, ncells2, ncells1);
+        Kokkos::realloc(utest, nmb, nhydro, ncells3, ncells2, ncells1);
+        Kokkos::deep_copy(fofc, false);
+      }
     }
   }
 }
