@@ -4,8 +4,8 @@
 // Licensed under the 3-clause BSD License (the "LICENSE")
 //========================================================================================
 //! \file history.cpp
-//  \brief writes history output data, volume-averaged quantities that are output
-//         frequently in time to trace their evolution.
+//! \brief Writes time series of volume-integrated quantities and user-defined
+//! diagnostics, with one file per physics module or user history tag.
 
 #include <cstdio>
 #include <cstdlib>
@@ -32,8 +32,20 @@ HistoryOutput::HistoryOutput(ParameterInput *pin, Mesh *pm, OutputParameters op)
   // cycle through physics modules and add HistoryData struct for each
   hist_data.clear();
 
+  // one UserDefined entry per file tag, or a single untagged one
+  auto add_user_hist = [&]() {
+    auto &tags = pm->pgen->user_hist_tags;
+    if (tags.empty()) {
+      hist_data.emplace_back(PhysicsModule::UserDefined);
+    } else {
+      for (int n=0; n<static_cast<int>(tags.size()); ++n) {
+        hist_data.emplace_back(PhysicsModule::UserDefined, n, tags[n]);
+      }
+    }
+  };
+
   if (pm->pgen->user_hist && op.user_hist_only) {
-    hist_data.emplace_back(PhysicsModule::UserDefined);
+    add_user_hist();
   } else {
     if (pm->pmb_pack->phydro != nullptr) {
       hist_data.emplace_back(PhysicsModule::HydroDynamics);
@@ -42,7 +54,7 @@ HistoryOutput::HistoryOutput(ParameterInput *pin, Mesh *pm, OutputParameters op)
       hist_data.emplace_back(PhysicsModule::MagnetoHydroDynamics);
     }
     if (pm->pgen->user_hist) {
-      hist_data.emplace_back(PhysicsModule::UserDefined);
+      add_user_hist();
     }
   }
 
@@ -394,7 +406,7 @@ void HistoryOutput::WriteOutputFile(Mesh *pm, ParameterInput *pin) {
 
     // only the master rank writes the file
     if (global_variable::my_rank == 0) {
-      // create filename: "file_basename" + ".physics" + ".hst"
+      // Filename: <basename>.<physics>.hst or <basename>.user.<tag>.hst.
       // There is no file number or id in history output filenames.
       std::string fname;
       fname.assign(out_params.file_basename);
@@ -409,6 +421,7 @@ void HistoryOutput::WriteOutputFile(Mesh *pm, ParameterInput *pin) {
           fname.append(".z4c");
         case PhysicsModule::UserDefined:
           fname.append(".user");
+          if (!data.user_tag.empty()) fname.append("." + data.user_tag);
           break;
         default:
           break;
