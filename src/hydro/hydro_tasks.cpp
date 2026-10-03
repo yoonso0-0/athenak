@@ -58,7 +58,20 @@ void Hydro::AssembleHydroTasks(std::map<std::string, std::shared_ptr<TaskList>> 
   id.recvf     = tl["stagen"]->AddTask(&Hydro::RecvFlux, this, id.sendf);
   id.rkupdt    = tl["stagen"]->AddTask(&Hydro::RKUpdate, this, id.recvf);
   id.srctrms   = tl["stagen"]->AddTask(&Hydro::HydroSrcTerms, this, id.rkupdt);
-  id.sendu_oa  = tl["stagen"]->AddTask(&Hydro::SendU_OA, this, id.srctrms);
+  // The spherical inner mask is applied TWICE per stage, on purpose.
+  //   masksphere_pre runs here, before the halo exchange, so that SendU/RecvU propagate
+  //     already-masked values and every block's ghost copy of a neighbour's share of the
+  //     sphere is current. This is what lets the sphere be split across MeshBlocks.
+  //     It needs primitives, which RKUpdate/HydroSrcTerms have left stale in w0, hence
+  //     the c2p_mask refresh (a no-op unless the BC actually interpolates w0).
+  //   masksphere runs at the end of the stage, after the final ConToPrim, so that w0
+  //     carries the exact prescribed state rather than a PrimToCons/ConsToPrim
+  //     round-trip of it. Only the pointwise BCs take that second pass: see
+  //     Hydro::MaskSphereImpl.
+  id.c2p_mask  = tl["stagen"]->AddTask(&Hydro::ConToPrimMask, this, id.srctrms);
+  id.masksphere_pre =
+      tl["stagen"]->AddTask(&Hydro::MaskSpherePre, this, id.c2p_mask);
+  id.sendu_oa  = tl["stagen"]->AddTask(&Hydro::SendU_OA, this, id.masksphere_pre);
   id.recvu_oa  = tl["stagen"]->AddTask(&Hydro::RecvU_OA, this, id.sendu_oa);
   id.restu     = tl["stagen"]->AddTask(&Hydro::RestrictU, this, id.recvu_oa);
   id.sendu     = tl["stagen"]->AddTask(&Hydro::SendU, this, id.restu);
@@ -67,8 +80,9 @@ void Hydro::AssembleHydroTasks(std::map<std::string, std::shared_ptr<TaskList>> 
   id.recvu_shr = tl["stagen"]->AddTask(&Hydro::RecvU_Shr, this, id.sendu_shr);
   id.prol      = tl["stagen"]->AddTask(&Hydro::Prolongate, this, id.recvu_shr);
   id.bcs       = tl["stagen"]->AddTask(&Hydro::ApplyPhysicalBCs, this, id.prol);
-  id.c2p       = tl["stagen"]->AddTask(&Hydro::ConToPrim, this, id.bcs);
-  id.newdt     = tl["stagen"]->AddTask(&Hydro::NewTimeStep, this, id.c2p);
+  id.c2p        = tl["stagen"]->AddTask(&Hydro::ConToPrim, this, id.bcs);
+  id.masksphere = tl["stagen"]->AddTask(&Hydro::MaskSphere, this, id.c2p);
+  id.newdt      = tl["stagen"]->AddTask(&Hydro::NewTimeStep, this, id.masksphere);
 
   // assemble "after_stagen" task list
   id.csend = tl["after_stagen"]->AddTask(&Hydro::ClearSend, this, none);
@@ -439,6 +453,30 @@ TaskStatus Hydro::ConToPrim(Driver *pdrive, int stage) {
   int n2m1 = (indcs.nx2 > 1)? (indcs.nx2 + 2*ng - 1) : 0;
   int n3m1 = (indcs.nx3 > 1)? (indcs.nx3 + 2*ng - 1) : 0;
   peos->ConsToPrim(u0, w0, false, 0, n1m1, 0, n2m1, 0, n3m1);
+  return TaskStatus::complete;
+}
+
+//----------------------------------------------------------------------------------------
+//! \fn TaskList Hydro::ConToPrimMask
+//! \brief Refreshes w0 over the ACTIVE zone only, immediately before the pre-exchange
+//! MaskSphere pass. RKUpdate/HydroSrcTerms leave this stage's new state in u0 while w0
+//! still holds the previous stage's primitives; Reflecting/Absorbing interpolate w0 at a
+//! mirror point and so need it current. Dirichlet/Spherical Wind set the masked state
+//! from the cell's position alone and never read w0, so this is a no-op for them, as it
+//! is whenever the mask is off or this rank holds no part of the sphere.
+//!
+//! Note this makes ConsToPrim run twice per stage over the active zone when the mask uses
+//! a mirror BC, which double-counts EOS floor events in the diagnostics. The floor
+//! counters are informational only, and a run in which they are nonzero is already
+//! suspect, so no attempt is made to deduplicate them.
+
+TaskStatus Hydro::ConToPrimMask(Driver *pdrive, int stage) {
+  if (!use_sphere_mask || !sm_needs_mirror || nmb_mask == 0) {
+    return TaskStatus::complete;
+  }
+  auto &indcs = pmy_pack->pmesh->mb_indcs;
+  peos->ConsToPrim(u0, w0, false, indcs.is, indcs.ie, indcs.js, indcs.je,
+                   indcs.ks, indcs.ke);
   return TaskStatus::complete;
 }
 

@@ -41,6 +41,7 @@ Hydro::Hydro(MeshBlockPack *ppack, ParameterInput *pin) :
     wr3d("wr3d",1,1,1,1,1),
     fofc("fofc",1,1,1,1),
     utest("utest",1,1,1,1,1),
+    sphere_mask_mbs("sphere_mask_mbs",1),
     pmy_pack(ppack) {
   // Total number of MeshBlocks on this rank to be used in array dimensioning
   int nmb = std::max((ppack->nmb_thispack), (ppack->pmesh->nmb_maxperrank));
@@ -344,6 +345,14 @@ Hydro::Hydro(MeshBlockPack *ppack, ParameterInput *pin) :
         Kokkos::deep_copy(fofc, false);
       }
     }
+  }
+
+  // (4) Spherical inner mask: overwrite w0/u0 within r<radius every stage so the
+  // sphere's surface behaves like an effective Dirichlet/Reflecting/Absorbing BC.
+  // Newtonian Hydro only; see hydro_sphere_mask.cpp for the task body.
+  use_sphere_mask = pin->GetOrAddBoolean("sphere_mask","enabled",false);
+  if (use_sphere_mask) {
+    InitSphereMask(pin);
   }
 }
 
