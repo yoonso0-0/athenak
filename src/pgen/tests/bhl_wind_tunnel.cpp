@@ -10,8 +10,8 @@
 //! the GM=1 point mass from <hydro_srcterms>/point_particle_gravity_at_center. The
 //! singular center is replaced by the spherical inner mask (<sphere_mask>); all bc
 //! options except dirichlet are allowed. The mask is a boundary condition, not a sink, so
-//! the accretion rate must be measured as an inward mass flux through a shell outside the
-//! mask radius.
+//! the accretion rate must be measured as minus the net outward mass flux through a shell
+//! outside the mask radius.
 //!
 //! The initial state is the uniform wind, evolved until the wake settles. The length
 //! scale is the accretion radius r_acc = 2GM/(vel_inf^2 + cs_inf^2). Startup prints the
@@ -27,18 +27,25 @@
 //! References: Hoyle & Lyttleton 1939, PCPS, 35, 405; Bondi & Hoyle 1944, MNRAS,
 //! 104, 273; Edgar 2004, NewAR, 48, 843.
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
+#include <memory>
+#include <sstream>
 #include <string>
+#include <vector>
 
 #include "athena.hpp"
 #include "globals.hpp"
 #include "parameter_input.hpp"
+#include "coordinates/cell_locations.hpp"
 #include "coordinates/coordinates.hpp"
 #include "eos/eos.hpp"
 #include "hydro/hydro.hpp"
 #include "mesh/mesh.hpp"
+#include "outputs/outputs.hpp"
 #include "pgen/pgen.hpp"
 #include "srcterms/srcterms.hpp"
 
@@ -57,10 +64,36 @@ struct WindTunnelData {
 
 WindTunnelData wind_tunnel;
 
+// Coordinate planes through the point mass that are reflecting mesh faces, for history
+// output on a mesh covering a symmetric part of the domain: +1 (-1) if the mesh covers
+// x_d >= 0 (x_d <= 0) with a reflecting face at x_d = 0, else 0.
+int flux_fold[3] = {0, 0, 0};
+
+// User history files 0..nflux_files-1 are the spherical fluxes (one per SphericalGrid);
+// the rest are the gravitational force of the gas in the shells volume_rmin <= r <
+// volume_radii[n] on the point mass.
+int nflux_files = 0;
+std::vector<Real> volume_radii;
+Real volume_rmin = 1.0;
+
 [[noreturn]] void Fatal(const std::string &message) {
   std::cout << "### FATAL ERROR in " << __FILE__ << std::endl
             << message << std::endl;
   std::exit(EXIT_FAILURE);
+}
+
+// Parse <problem>/name, a comma-separated list of numbers, e.g. 0.3, 0.5, 1.0
+std::vector<Real> ParseRadii(ParameterInput *pin, const std::string &name) {
+  std::string list = pin->GetString("problem", name);
+  std::replace(list.begin(), list.end(), ',', ' ');
+  std::stringstream stream(list);
+  std::vector<Real> radii;
+  Real value;
+  while (stream >> value) radii.push_back(value);
+  if (!stream.eof() || radii.empty()) {
+    Fatal("<problem>/" + name + " must be a comma-separated list of numbers");
+  }
+  return radii;
 }
 
 // Overwrite one boundary cell with the uniform upstream state.
@@ -127,6 +160,132 @@ void FixedWindBoundary(Mesh *pm) {
         SetUpstream(p, u0, m, ke+1+g, j, i, nhydro, nscalars);
       }
     });
+  }
+}
+
+//----------------------------------------------------------------------------------------
+//! \fn void SphericalFluxHistory()
+//! \brief User history: net outward fluxes through the sphere of radius
+//! <problem>/flux_radii[pdata->user_index] centered on the point mass (so accretion
+//! appears as a negative mass flux). Columns: mass flux \oint dens v.rhat dA and the
+//! three components of the momentum flux \oint (dens v_i v.rhat + pres rhat_i) dA,
+//! pressure included. Called once per radius; each gets its own history file,
+//! <basename>.user.flux<n>.hst, n = 0, 1, ... in flux_radii order. If the mesh covers
+//! only half (or a quarter, ...) of the domain behind reflecting faces at x_d = 0, the
+//! part of the sphere outside the mesh is sampled at the mirror image points and the
+//! fluxes are those of the full sphere.
+
+void SphericalFluxHistory(HistoryData *pdata, Mesh *pm) {
+  auto &grid = pm->pgen->spherical_grids[pdata->user_index];
+  auto *phydro = pm->pmb_pack->phydro;
+  auto &eos = phydro->peos->eos_data;
+
+  pdata->nhist = 4;
+  pdata->label[0] = "mflux";
+  pdata->label[1] = "pflux1";
+  pdata->label[2] = "pflux2";
+  pdata->label[3] = "pflux3";
+
+  // Each rank interpolates onto the angles it owns and zeros the rest; the history
+  // output then sums over ranks.
+  grid->InterpolateToSphere(phydro->nhydro, phydro->w0);
+  const Real r = grid->radius;
+  Real flux[4] = {0.0, 0.0, 0.0, 0.0};
+  for (int n=0; n<grid->nangles; ++n) {
+    const Real theta = grid->polar_pos.h_view(n,0);
+    const Real phi = grid->polar_pos.h_view(n,1);
+    const Real rhat[3] = {sin(theta)*cos(phi), sin(theta)*sin(phi), cos(theta)};
+    const Real dens = grid->interp_vals.h_view(n,IDN);
+    Real vel[3] = {grid->interp_vals.h_view(n,IVX),
+                   grid->interp_vals.h_view(n,IVY),
+                   grid->interp_vals.h_view(n,IVZ)};
+    // the value was interpolated at the mirror image of this point: flip its normal
+    // velocity component
+    for (int d=0; d<3; ++d) {
+      if (flux_fold[d]*rhat[d] < 0.0) vel[d] = -vel[d];
+    }
+    const Real pres = eos.is_ideal ? (eos.gamma - 1.0)*grid->interp_vals.h_view(n,IEN)
+                                   : dens*SQR(eos.iso_cs);
+    const Real vr = vel[0]*rhat[0] + vel[1]*rhat[1] + vel[2]*rhat[2];
+    const Real dA = SQR(r)*grid->solid_angles.h_view(n);
+    flux[0] += dens*vr*dA;
+    for (int d=0; d<3; ++d) {
+      flux[1+d] += (dens*vel[d]*vr + pres*rhat[d])*dA;
+    }
+  }
+  for (int n=0; n<pdata->nhist; ++n) pdata->hdata[n] = flux[n];
+
+  for (int n=pdata->nhist; n<NHISTORY_VARIABLES; ++n) pdata->hdata[n] = 0.0;
+}
+
+//----------------------------------------------------------------------------------------
+//! \fn void GravityForceHistory()
+//! \brief User history: total gravitational force of the gas in the shell
+//! volume_rmin <= r < rout on the GM=1 point mass, F = \int dens x/r^3 dV (minus the
+//! force of the point mass on the gas), which is exactly Newtonian as volume_rmin >= the
+//! softening length. Cells are included by the position of their center, so the shell
+//! edges are accurate to a cell, and only the part of the shell inside the mesh is
+//! integrated. On a mesh covering a symmetric part of the domain (see
+//! SphericalFluxHistory) the result is that of the full domain: the sum is scaled by the
+//! number of mirror images and the force component normal to a symmetry plane, which
+//! cancels between them, is zero.
+
+void GravityForceHistory(HistoryData *pdata, Mesh *pm, const Real rout) {
+  auto &w0 = pm->pmb_pack->phydro->w0;
+  auto &size = pm->pmb_pack->pmb->mb_size;
+  auto &indcs = pm->mb_indcs;
+  const int is = indcs.is, js = indcs.js, ks = indcs.ks;
+  const int nx1 = indcs.nx1, nx2 = indcs.nx2, nx3 = indcs.nx3;
+  const int nkji = nx3*nx2*nx1;
+  const int nji = nx2*nx1;
+  const int nmkji = pm->pmb_pack->nmb_thispack*nkji;
+  const Real r2in = SQR(volume_rmin);
+  const Real r2out = SQR(rout);
+
+  pdata->nhist = 3;
+  pdata->label[0] = "fgrav1";
+  pdata->label[1] = "fgrav2";
+  pdata->label[2] = "fgrav3";
+
+  array_sum::GlobalSum sum_this_rank;
+  Kokkos::parallel_reduce("bhl_gravity_force",
+                          Kokkos::RangePolicy<>(DevExeSpace(), 0, nmkji),
+  KOKKOS_LAMBDA(const int &idx, array_sum::GlobalSum &sum) {
+    int m = idx/nkji;
+    int k = (idx - m*nkji)/nji;
+    int j = (idx - m*nkji - k*nji)/nx1;
+    int i = idx - m*nkji - k*nji - j*nx1;
+    const Real x1 = CellCenterX(i, nx1, size.d_view(m).x1min, size.d_view(m).x1max);
+    const Real x2 = CellCenterX(j, nx2, size.d_view(m).x2min, size.d_view(m).x2max);
+    const Real x3 = CellCenterX(k, nx3, size.d_view(m).x3min, size.d_view(m).x3max);
+    const Real r2 = SQR(x1) + SQR(x2) + SQR(x3);
+    if (r2 >= r2in && r2 < r2out) {
+      const Real vol = size.d_view(m).dx1*size.d_view(m).dx2*size.d_view(m).dx3;
+      const Real fac = vol*w0(m,IDN,k+ks,j+js,i+is)/(r2*sqrt(r2));
+      sum.the_array[0] += fac*x1;
+      sum.the_array[1] += fac*x2;
+      sum.the_array[2] += fac*x3;
+    }
+  }, Kokkos::Sum<array_sum::GlobalSum>(sum_this_rank));
+
+  Real nimages = 1.0;
+  for (int d=0; d<3; ++d) nimages *= (flux_fold[d] != 0) ? 2.0 : 1.0;
+  for (int d=0; d<3; ++d) {
+    pdata->hdata[d] = (flux_fold[d] != 0) ? 0.0 : nimages*sum_this_rank.the_array[d];
+  }
+
+  for (int n=pdata->nhist; n<NHISTORY_VARIABLES; ++n) pdata->hdata[n] = 0.0;
+}
+
+//----------------------------------------------------------------------------------------
+//! \fn void BHLUserHistory()
+//! \brief Dispatches the user history files, see nflux_files.
+
+void BHLUserHistory(HistoryData *pdata, Mesh *pm) {
+  if (pdata->user_index < nflux_files) {
+    SphericalFluxHistory(pdata, pm);
+  } else {
+    GravityForceHistory(pdata, pm, volume_radii[pdata->user_index - nflux_files]);
   }
 }
 
@@ -217,6 +376,85 @@ void ProblemGenerator::BHLWindTunnel(ParameterInput *pin, const bool restart) {
   }
 
   user_bcs_func = FixedWindBoundary;
+
+  // Optional history output, one file per radius: mass and momentum fluxes through the
+  // spheres in flux_radii, and the gravitational force of the gas in the shells
+  // volume_rmin <= r < volume_radii[n] on the point mass.
+  if (user_hist) {
+    if (!pmy_mesh_->three_d) {
+      Fatal("<problem>/user_hist (spherical integrals) requires a 3D mesh");
+    }
+    const bool has_flux = pin->DoesParameterExist("problem", "flux_radii");
+    const bool has_volume = pin->DoesParameterExist("problem", "volume_radii");
+    if (!has_flux && !has_volume) {
+      Fatal("<problem>/user_hist=true requires <problem>/flux_radii and/or "
+            "<problem>/volume_radii");
+    }
+    // A face at x_d = 0 with a reflecting BC is a symmetry plane: the integrals cover
+    // the full domain by mirroring (see SphericalFluxHistory). A flux sphere must
+    // otherwise fit inside the mesh.
+    auto &msize = pmy_mesh_->mesh_size;
+    const Real lo[3] = {msize.x1min, msize.x2min, msize.x3min};
+    const Real hi[3] = {msize.x1max, msize.x2max, msize.x3max};
+    Real extent = std::numeric_limits<Real>::max();
+    for (int d=0; d<3; ++d) {
+      const bool fold_lo = (lo[d] == 0.0 &&
+                            pmy_mesh_->mesh_bcs[2*d] == BoundaryFlag::reflect);
+      const bool fold_hi = (hi[d] == 0.0 &&
+                            pmy_mesh_->mesh_bcs[2*d+1] == BoundaryFlag::reflect);
+      flux_fold[d] = fold_lo ? 1 : (fold_hi ? -1 : 0);
+      if (!fold_lo) extent = std::min(extent, -lo[d]);
+      if (!fold_hi) extent = std::min(extent, hi[d]);
+    }
+
+    if (has_flux) {
+      // geodesic grid level of the flux spheres: 10*nlev^2 + 2 points each
+      const int flux_nlev = pin->GetOrAddInteger("problem", "flux_nlev", 5);
+      if (flux_nlev < 1) Fatal("<problem>/flux_nlev must be at least 1");
+      for (const Real flux_radius : ParseRadii(pin, "flux_radii")) {
+        if (!(flux_radius > phydro->sphere_mask_radius && flux_radius < extent)) {
+          Fatal("each <problem>/flux_radii entry must lie between the mask radius and "
+                "the distance from the origin to the nearest domain boundary (a "
+                "boundary at coordinate 0 only counts as a symmetry plane if it is "
+                "reflecting)");
+        }
+        spherical_grids.push_back(
+            std::make_unique<SphericalGrid>(pmbp, flux_nlev, flux_radius));
+        spherical_grids.back()->FoldInterpolationCoordinates(flux_fold);
+        user_hist_tags.push_back("flux" + std::to_string(user_hist_tags.size()));
+      }
+    }
+    nflux_files = user_hist_tags.size();
+
+    if (has_volume) {
+      volume_rmin = pin->GetOrAddReal("problem", "volume_rmin", 1.0);
+      if (!(volume_rmin >= phydro->psrc->softening_length)) {
+        Fatal("<problem>/volume_rmin must be at least gravity_softening_length, so "
+              "that the force in the shell is exactly Newtonian");
+      }
+      volume_radii = ParseRadii(pin, "volume_radii");
+      for (std::size_t n = 0; n < volume_radii.size(); ++n) {
+        if (!(volume_radii[n] > volume_rmin)) {
+          Fatal("each <problem>/volume_radii entry must exceed <problem>/volume_rmin");
+        }
+        user_hist_tags.push_back("vol" + std::to_string(n));
+      }
+    }
+
+    if (global_variable::my_rank == 0) {
+      std::cout << "BHL user history files <basename>.user.<tag>.hst:" << std::endl;
+      for (std::size_t n = 0; n < user_hist_tags.size(); ++n) {
+        const bool is_flux = static_cast<int>(n) < nflux_files;
+        std::cout << "  " << user_hist_tags[n] << ": "
+                  << (is_flux ? "fluxes through the sphere r="
+                              : "gravitational force of the shell, outer r=")
+                  << (is_flux ? spherical_grids[n]->radius
+                              : volume_radii[n - nflux_files]) << std::endl;
+      }
+    }
+    user_hist_func = BHLUserHistory;
+  }
+
   if (restart) return;
 
   auto &indcs = pmy_mesh_->mb_indcs;

@@ -3,8 +3,8 @@
 # Cheap 2D pilot for the point-particle gravity source term and the spherical_wind
 # <sphere_mask>. The mesh is a plane but the potential is still the 3D GM/r one, so this
 # is qualitative, not a quantitative BHL measurement. The mask is an inner boundary
-# condition, not a sink: measure accretion as an inward mass flux through a shell outside
-# r_mask, not as mass lost from the box.
+# condition, not a sink: measure accretion as minus the net outward mass flux through a
+# shell outside r_mask, not as mass lost from the box.
 #
 # Caveats:
 #  - Half-plane domain (x2 >= 0, ix2_bc = reflect): the solution is exactly mirror
