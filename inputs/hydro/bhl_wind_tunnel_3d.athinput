@@ -72,12 +72,14 @@ gravity_softening_length         = 0.1    # equals the sphere_mask radius below
 <problem>
 pgen_name = bhl_wind_tunnel
 # User history: one file <basename>.user.flux<n>.hst per flux radius and one
-# <basename>.user.vol<n>.hst per volume radius, n = 0, 1, ... in the order listed.
+# <basename>.user.vol<n>.hst per volume radius, n = 0, 1, ... in the order listed, and
+# <basename>.user.domain.hst if domain_hist is set.
 user_hist = true
 flux_radii = 0.25, 0.5  # outward mass and momentum fluxes through spheres of these radii
 flux_nlev = 5           # geodesic grid level of those spheres, 10*nlev^2+2 points
 volume_radii = 1.5, 2.0 # gravitational force of the gas in volume_rmin <= r < radius on the mass
 volume_rmin = 1.0       # inner radius of those shells, at least gravity_softening_length
+domain_hist = true      # mass, gravity on the mass and momentum change outside the mask
 dens_inf  = 1.0         # upstream density
 cs_inf    = 1.0         # upstream sound speed
 vel_inf   = 2.0         # upstream speed (Mach 2 for cs_inf = 1)
