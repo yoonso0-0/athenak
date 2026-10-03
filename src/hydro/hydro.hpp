@@ -45,6 +45,8 @@ struct HydroTaskIDs {
   TaskID recvf;
   TaskID rkupdt;
   TaskID srctrms;
+  TaskID c2p_mask;
+  TaskID masksphere_pre;
   TaskID sendu_oa;
   TaskID recvu_oa;
   TaskID restu;
@@ -55,6 +57,7 @@ struct HydroTaskIDs {
   TaskID bcs;
   TaskID prol;
   TaskID c2p;
+  TaskID masksphere;
   TaskID newdt;
   TaskID csend;
   TaskID crecv;
@@ -128,6 +131,32 @@ class Hydro {
   bool use_fofc = false;   // flag to enable FOFC
   DvceArray5D<Real> utest;  // scratch array for FOFC
 
+  // following used for the spherical inner mask (effective BC on an internal sphere)
+  // dirichlet:  fixed state (dens,vel1,vel2,vel3,pres), overwritten verbatim.
+  // reflecting: exterior state mirrored through r=radius, radial velocity flipped.
+  // absorbing:  same mirrored density/pressure as reflecting, velocity set to zero.
+  // spherical_wind: fixed (dens,eint) as with dirichlet, but velocity is prescribed as
+  //             a radial field of fixed magnitude vel_r (sign: >0 outward/wind,
+  //             <0 inward/accretion) rather than a fixed Cartesian vector.
+  enum class SphereMaskBC {dirichlet, reflecting, absorbing, spherical_wind};
+  bool use_sphere_mask = false;    // flag to enable the spherical inner mask
+  Real sphere_mask_radius = 0.0;   // radius R of the masked sphere, centered at origin
+  SphereMaskBC sphere_mask_bc;     // which effective BC to emulate at r=R
+  // Dirichlet/spherical_wind target state; eint (not pressure) is specified directly
+  Real sm_dens, sm_vel1, sm_vel2, sm_vel3, sm_eint;
+  Real sm_velr = 0.0;              // spherical_wind: prescribed radial velocity magnitude
+  // true for Reflecting/Absorbing, which interpolate the exterior state at a mirror
+  // point; false for the pointwise Dirichlet/Spherical Wind, which read no neighbours.
+  // Set once by InitSphereMask and used to pick which of the two mask passes runs.
+  bool sm_needs_mirror = false;
+  // local pack indices of every MeshBlock on this rank holding masked cells (r<radius).
+  // With the origin strictly inside one block this is that single block; when block
+  // boundaries meet at the origin -- as they always do for a 2^N root grid on a domain
+  // symmetric about 0 -- the sphere is cut into 2/4/8 pieces and each is masked by the
+  // block owning it. Zero-length on ranks holding no part of the sphere.
+  int nmb_mask = 0;
+  DualArray1D<int> sphere_mask_mbs;
+
   // container to hold names of TaskIDs
   HydroTaskIDs id;
 
@@ -153,6 +182,12 @@ class Hydro {
   TaskStatus ApplyPhysicalBCs(Driver* pdrive, int stage);
   TaskStatus Prolongate(Driver* pdrive, int stage);
   TaskStatus ConToPrim(Driver *d, int stage);
+  TaskStatus ConToPrimMask(Driver *d, int stage);
+  TaskStatus MaskSphere(Driver *d, int stage);
+  TaskStatus MaskSpherePre(Driver *d, int stage);
+  // shared body of MaskSpherePre (pre=true) and MaskSphere (pre=false). Public because
+  // nvcc rejects a KOKKOS_LAMBDA in a private or protected member function.
+  TaskStatus MaskSphereImpl(bool pre);
   TaskStatus NewTimeStep(Driver *d, int stage);
   TaskStatus ClearSTSFlux(Driver *d, int stage);
   TaskStatus STSFluxes(Driver *d, int stage);
@@ -171,6 +206,8 @@ class Hydro {
 
  private:
   void AddSelectedDiffusionFluxes(parabolic::DiffusionSelection selection);
+  // parses <sphere_mask> input block and validates mesh/MeshBlock layout
+  void InitSphereMask(ParameterInput *pin);
   MeshBlockPack* pmy_pack;  // ptr to MeshBlockPack containing this Hydro
 };
 

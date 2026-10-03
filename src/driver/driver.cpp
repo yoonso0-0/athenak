@@ -766,6 +766,13 @@ void Driver::InitBoundaryValuesAndPrimitives(Mesh *pm) {
   hydro::Hydro *phydro = pm->pmb_pack->phydro;
   if (phydro != nullptr) {
     // following functions return a TaskStatus, but it is ignored so cast to (void)
+    // Apply the spherical mask to active cells before the initial restriction and halo
+    // exchange, exactly as is done after every RK update.  In particular, the mirror
+    // BCs skip the final MaskSphere pass below, and therefore must be initialized here;
+    // doing this first also ensures that internal and physical ghost cells are filled
+    // from already-masked active cells before the first flux calculation.
+    (void) phydro->ConToPrimMask(this, 0);
+    (void) phydro->MaskSpherePre(this, 0);
     (void) phydro->RestrictU(this, 0);
     (void) phydro->InitRecv(this, -1);  // stage < 0 suppresses InitFluxRecv
     (void) phydro->SendU(this, 0);
@@ -779,6 +786,7 @@ void Driver::InitBoundaryValuesAndPrimitives(Mesh *pm) {
     (void) phydro->Prolongate(this, 0); // coarse grid BCs and prolongation
     (void) phydro->ApplyPhysicalBCs(this, 0); // fine grid BCs
     (void) phydro->ConToPrim(this, 0);
+    (void) phydro->MaskSphere(this, 0); // overwrite interior state (if enabled) at t=0
   }
 
   // Initialize MHD: ghost zones and primitive variables (everywhere)
