@@ -1,0 +1,81 @@
+# AthenaK input file: 3D transonic isothermal Parker wind on a Cartesian mesh.
+#
+# This selects the Parker branch of the built-in newtonian_spherical.cpp problem
+# generator.  The same pgen also supplies Newtonian Bondi accretion when
+# <problem>/pgen_name=newtonian_bondi.
+#
+# The analytic solution is imposed on all six user boundaries.  The pgen sets the
+# spherical_wind mask to the analytic state at its surface.
+
+<comment>
+problem   = 3D transonic isothermal Parker wind
+reference = Parker, E. N., ApJ 128, 664 (1958)
+
+<job>
+basename  = ParkerWind3D
+
+<mesh>
+nghost    = 3
+nx1       = 64
+x1min     = -3.0
+x1max     = 3.0
+ix1_bc    = user
+ox1_bc    = user
+
+nx2       = 64
+x2min     = -3.0
+x2max     = 3.0
+ix2_bc    = user
+ox2_bc    = user
+
+nx3       = 64
+x3min     = -3.0
+x3max     = 3.0
+ix3_bc    = user
+ox3_bc    = user
+
+<meshblock>
+# One MeshBlock only for simplicity: bc=spherical_wind places no constraint on the layout.
+nx1       = 64
+nx2       = 64
+nx3       = 64
+
+<time>
+evolution  = dynamic
+integrator = rk3
+cfl_number = 0.3
+nlim       = -1
+tlim       = 0.5
+ndiag      = 200
+
+<hydro>
+eos             = isothermal
+iso_sound_speed = 0.7071067811865475  # rs=GM/(2 cs^2)=1 for GM=1
+reconstruct     = ppm4
+rsolver         = roe
+dfloor          = 1.0e-10
+
+<hydro_srcterms>
+point_particle_gravity_at_center = true
+gravity_softening_length         = 0.5  # gravity is Newtonian outside the mask
+
+<problem>
+pgen_name     = parker_wind  # select outflow in newtonian_spherical.cpp
+sonic_density = 1.0          # density at the transonic critical point
+
+<sphere_mask>
+enabled = true
+radius  = 0.5
+bc      = spherical_wind
+# The pgen sets dens and vel_r to the analytic state at radius, so they are not given
+# here: dens=11.4629075 and vel_r=0.24674605 for the parameters above.
+
+<output1>
+file_type   = hst
+data_format = %.17g
+dt          = 0.05
+
+<output2>
+file_type = bin
+variable  = hydro_w
+dt        = 0.1
