@@ -1,0 +1,82 @@
+# AthenaK input file: 3D Bondi-Hoyle-Lyttleton wind tunnel, isothermal EOS
+#
+# Isothermal companion to bhl_wind_tunnel_3d.athinput (same mesh, gravity and absorbing
+# mask), exercising the nhydro=4 path. The sound speed is <hydro>/iso_sound_speed, so
+# <problem>/cs_inf is not read; the wind is still set by <problem>/mach_inf.
+#
+# Scales are those of the ideal companion (r_acc = 0.4, Mdot_BHL = 1.124, Mdot_HL = 1.571),
+# plus the spherical Bondi limit Mdot = 4 pi lambda (GM)^2 rho/c_iso^3 = 14.08 with
+# lambda = e^1.5/4, printed at startup for reference.
+#
+# An isothermal gas is more compressible, so expect a narrower, denser wake and a smaller
+# timestep. hllc is ideal-EOS only, so this run uses hlle.
+
+<comment>
+problem   = 3D isothermal BHL wind tunnel: Mach-2 wind past a masked GM=1 point mass
+
+<job>
+basename  = BHLWindTunnel3DIso
+
+<mesh>
+nghost    = 3          # Number of ghost cells (3 required by ppm4)
+nx1       = 160        # Number of zones in X1-direction (dx = 0.025)
+x1min     = -1.0       # minimum value of X1: 2.5 accretion radii upstream
+x1max     = 3.0        # maximum value of X1: 7.5 accretion radii of wake
+ix1_bc    = user       # upstream face: held at the uniform wind state
+ox1_bc    = outflow    # downstream face: the wake must be able to leave
+
+nx2       = 80         # Number of zones in X2-direction (dx = 0.025)
+x2min     = -1.0       # minimum value of X2
+x2max     = 1.0        # maximum value of X2
+ix2_bc    = outflow    # transverse faces: 'user' would also be valid here
+ox2_bc    = outflow
+
+nx3       = 80         # Number of zones in X3-direction (dx = 0.025)
+x3min     = -1.0       # minimum value of X3
+x3max     = 1.0        # maximum value of X3
+ix3_bc    = outflow
+ox3_bc    = outflow
+
+<meshblock>
+nx1       = 160        # single MeshBlock spans the full domain
+nx2       = 80
+nx3       = 80
+
+<time>
+evolution  = dynamic    # dynamic/kinematic/static
+integrator = rk2        # time integration algorithm
+cfl_number = 0.3        # The Courant, Friedrichs, & Lewy (CFL) Number
+nlim       = -1         # cycle limit
+tlim       = 4.0        # time limit: two flow-through times
+ndiag      = 200        # cycles between diagostic output
+
+<hydro>
+eos             = isothermal  # EOS type
+reconstruct     = ppm4        # spatial reconstruction method
+rsolver         = hlle        # Riemann-solver to be used (hllc is ideal-EOS only)
+iso_sound_speed = 1.0         # sound speed, which here is also cs_inf
+
+<hydro_srcterms>
+point_particle_gravity_at_center = true   # GM=1 point mass at the coordinate origin
+gravity_softening_length         = 0.1    # equals the sphere_mask radius below
+
+<problem>
+pgen_name = bhl_wind_tunnel
+dens_inf  = 1.0         # upstream density
+mach_inf  = 2.0         # upstream Mach number; sets vel_inf = mach_inf*iso_sound_speed
+# cs_inf is not read for an isothermal EOS: <hydro>/iso_sound_speed sets it instead.
+
+<sphere_mask>
+enabled   = true
+radius    = 0.1         # mask radius, 0.25 of the accretion radius 0.4
+bc        = absorbing   # inner BC, not a mass sink; bc=reflecting gives a solid body
+
+<output1>
+file_type   = hst       # history data dump
+data_format = %12.5e    # optional data format string
+dt          = 0.05      # time increment between outputs
+
+<output2>
+file_type  = bin        # AthenaK native binary dump
+variable   = hydro_w    # variables to be output
+dt         = 0.2        # time increment between outputs
