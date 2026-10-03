@@ -1,0 +1,99 @@
+# AthenaK input file: 3D Newtonian Bondi accretion, ideal EOS
+#
+# This selects the ideal-gas Bondi branch of the built-in newtonian_spherical.cpp problem
+# generator.  The same pgen supplies an isothermal Parker wind when
+# <problem>/pgen_name=parker_wind.
+#
+# Steady spherically symmetric transonic accretion onto the GM=1 point mass supplied by
+# <hydro_srcterms>/point_particle_gravity_at_center, with the singular r=0 region replaced
+# by the spherical inner mask (<sphere_mask>, bc=absorbing).  The pgen
+# initializes the exact analytic solution everywhere and holds it fixed on all six outer
+# faces (all flagged 'user'), so any evolution away from the initial state measures the
+# scheme's error, reported by the automatic error output at the end of the run.
+#
+# Scales, with GM=1, dens_inf=1 and cs_inf=1 below:
+#   Bondi radius    r_B     = GM/cs_inf^2      = 1.0
+#   sonic radius    r_s     = (5-3*gamma)/4 r_B = 0.25   (gamma = 4/3)
+#   eigenvalue      lambda                     = 0.70711
+#   accretion rate  Mdot    = 4 pi lambda dens_inf cs_inf r_B^2 = 8.886
+# At the mask surface r=0.1 the analytic solution has dens = 23.97 and inflow speed 2.949
+# (Mach 1.73), i.e. the flow is already supersonic there, so the mask cannot send signals
+# back out into the domain.  The mask radius and the gravitational softening length are
+# set equal, so gravity is an exact 1/r^2 field everywhere the solution is evolved.
+#
+# Resolution note: the mask sphere must fit (with its mirror-point stencil) inside the
+# single MeshBlock that owns the origin, which is why the mesh below is one MeshBlock.
+# Raising nx1/nx2/nx3 together is the way to run this as a convergence test; the radius
+# and softening length should be left alone when doing so.
+
+<comment>
+problem   = 3D Newtonian Bondi accretion onto a masked, gravitating GM=1 point mass
+
+<job>
+basename  = NewtonianBondi3D
+
+<mesh>
+nghost    = 3          # Number of ghost cells (3 required by ppm4)
+nx1       = 96         # Number of zones in X1-direction
+x1min     = -1.0       # minimum value of X1
+x1max     = 1.0        # maximum value of X1
+ix1_bc    = user       # inner-X1 boundary flag: held at the analytic solution
+ox1_bc    = user       # outer-X1 boundary flag: held at the analytic solution
+
+nx2       = 96         # Number of zones in X2-direction
+x2min     = -1.0       # minimum value of X2
+x2max     = 1.0        # maximum value of X2
+ix2_bc    = user       # inner-X2 boundary flag
+ox2_bc    = user       # outer-X2 boundary flag
+
+nx3       = 96         # Number of zones in X3-direction
+x3min     = -1.0       # minimum value of X3
+x3max     = 1.0        # maximum value of X3
+ix3_bc    = user       # inner-X3 boundary flag
+ox3_bc    = user       # outer-X3 boundary flag
+
+<meshblock>
+nx1       = 96         # single MeshBlock spans the full domain, as <sphere_mask> requires
+nx2       = 96
+nx3       = 96
+
+<time>
+evolution  = dynamic    # dynamic/kinematic/static
+integrator = rk2        # time integration algorithm
+cfl_number = 0.3        # The Courant, Friedrichs, & Lewy (CFL) Number
+nlim       = -1         # cycle limit
+tlim       = 2.0        # time limit: ~2 sound crossing times of the half-domain
+ndiag      = 200        # cycles between diagostic output
+
+<hydro>
+eos         = ideal     # EOS type
+reconstruct = ppm4      # spatial reconstruction method
+rsolver     = hllc      # Riemann-solver to be used
+gamma       = 1.333333333333 # gamma = C_p/C_v (must be < 5/3 for a transonic solution)
+
+<hydro_srcterms>
+point_particle_gravity_at_center = true   # GM=1 point mass at the coordinate origin
+gravity_softening_length         = 0.1    # equals the sphere_mask radius below
+
+<problem>
+pgen_name = newtonian_bondi  # select inflow in newtonian_spherical.cpp
+dens_inf  = 1.0         # density at infinity
+cs_inf    = 1.0         # sound speed at infinity; sets the Bondi radius GM/cs_inf^2
+# r_floor: radius inside which the analytic solution is not evaluated.  Left unset, it
+# defaults to sphere_mask/radius.  Those cells are masked every stage anyway.
+
+<sphere_mask>
+enabled   = true
+radius    = 0.1         # inside the sonic radius 0.25, so the mask is causally isolated
+bc        = absorbing   # inner BC: mirrored density/pressure, zero velocity; no mass
+                        # is removed from the domain, so this is not a mass sink
+
+<output1>
+file_type   = hst       # history data dump
+data_format = %12.5e    # optional data format string
+dt          = 0.05      # time increment between outputs
+
+<output2>
+file_type  = bin        # AthenaK native binary dump
+variable   = hydro_w    # variables to be output
+dt         = 0.1        # time increment between outputs

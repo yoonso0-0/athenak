@@ -1,0 +1,96 @@
+# AthenaK input file: 3D Newtonian Bondi accretion, isothermal EOS
+#
+# This selects the isothermal Bondi branch of the built-in newtonian_spherical.cpp problem
+# generator.  It shares the isothermal transonic Mach solver with the Parker-wind branch,
+# but chooses the supersonic root inside the sonic radius rather than outside it.
+#
+# Isothermal companion to newtonian_bondi_3d.athinput: same mesh, same GM=1 point-particle
+# gravity source term and same spherical mask, but with <hydro>/eos = isothermal.  This
+# exercises the nhydro=4 path through both new features -- in particular the eos_data
+# .is_ideal guard on the energy update in SourceTerms::PointParticleGravity, which has no
+# IEN variable to write to here.
+#
+# The isothermal Bondi solution is the gamma -> 1 limit: the enthalpy term in the
+# Bernoulli integral becomes ln(rho/dens_inf), and the sound speed at infinity is not a
+# free parameter but <hydro>/iso_sound_speed, so <problem>/cs_inf is not read.
+#
+# Scales, with GM=1, dens_inf=1 and iso_sound_speed=1 below:
+#   Bondi radius    r_B     = GM/c_iso^2                  = 1.0
+#   sonic radius    r_s     = r_B/2                       = 0.5
+#   eigenvalue      lambda  = exp(3/2)/4                  = 1.12042
+#   accretion rate  Mdot    = 4 pi lambda dens_inf c_iso r_B^2 = 14.08
+# At the mask surface r=0.1 the analytic solution has dens = 30.91 and inflow speed 3.625,
+# i.e. Mach 3.6 -- comfortably supersonic, so the mask is causally isolated from the rest
+# of the domain.
+#
+# Note hllc is ideal-EOS only, so the isothermal run uses hlle.
+
+<comment>
+problem   = 3D isothermal Newtonian Bondi accretion onto a GM=1 point mass
+
+<job>
+basename  = NewtonianBondi3DIso
+
+<mesh>
+nghost    = 3          # Number of ghost cells (3 required by ppm4)
+nx1       = 96         # Number of zones in X1-direction
+x1min     = -1.0       # minimum value of X1
+x1max     = 1.0        # maximum value of X1
+ix1_bc    = user       # inner-X1 boundary flag: held at the analytic solution
+ox1_bc    = user       # outer-X1 boundary flag: held at the analytic solution
+
+nx2       = 96         # Number of zones in X2-direction
+x2min     = -1.0       # minimum value of X2
+x2max     = 1.0        # maximum value of X2
+ix2_bc    = user       # inner-X2 boundary flag
+ox2_bc    = user       # outer-X2 boundary flag
+
+nx3       = 96         # Number of zones in X3-direction
+x3min     = -1.0       # minimum value of X3
+x3max     = 1.0        # maximum value of X3
+ix3_bc    = user       # inner-X3 boundary flag
+ox3_bc    = user       # outer-X3 boundary flag
+
+<meshblock>
+nx1       = 96         # single MeshBlock spans the full domain, as <sphere_mask> requires
+nx2       = 96
+nx3       = 96
+
+<time>
+evolution  = dynamic    # dynamic/kinematic/static
+integrator = rk2        # time integration algorithm
+cfl_number = 0.3        # The Courant, Friedrichs, & Lewy (CFL) Number
+nlim       = -1         # cycle limit
+tlim       = 2.0        # time limit: ~2 sound crossing times of the half-domain
+ndiag      = 200        # cycles between diagostic output
+
+<hydro>
+eos             = isothermal  # EOS type
+reconstruct     = ppm4        # spatial reconstruction method
+rsolver         = hlle        # Riemann-solver to be used (hllc is ideal-EOS only)
+iso_sound_speed = 1.0         # sound speed, which here is also cs_inf
+
+<hydro_srcterms>
+point_particle_gravity_at_center = true   # GM=1 point mass at the coordinate origin
+gravity_softening_length         = 0.1    # equals the sphere_mask radius below
+
+<problem>
+pgen_name = newtonian_bondi  # select inflow in newtonian_spherical.cpp
+dens_inf  = 1.0         # density at infinity
+# cs_inf is not read for an isothermal EOS: <hydro>/iso_sound_speed sets it instead.
+
+<sphere_mask>
+enabled   = true
+radius    = 0.1         # well inside the sonic radius 0.5
+bc        = absorbing   # inner BC: mirrored density, zero velocity; no mass is removed
+                        # from the domain, so this is not a mass sink
+
+<output1>
+file_type   = hst       # history data dump
+data_format = %12.5e    # optional data format string
+dt          = 0.05      # time increment between outputs
+
+<output2>
+file_type  = bin        # AthenaK native binary dump
+variable   = hydro_w    # variables to be output
+dt         = 0.1        # time increment between outputs

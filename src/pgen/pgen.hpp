@@ -66,6 +66,7 @@ class ProblemGenerator {
   void LWImplode(ParameterInput *pin, const bool restart);
   void Monopole(ParameterInput *pin, const bool restart);
   void MRI3d(ParameterInput *pin, const bool restart);
+  void NewtonianSphericalFlow(ParameterInput *pin, const bool restart);
   void OrszagTang(ParameterInput *pin, const bool restart);
   void ShockTube(ParameterInput *pin, const bool restart);
   void Shwave(ParameterInput *pin, const bool restart);

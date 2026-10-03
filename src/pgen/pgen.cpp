@@ -935,6 +935,9 @@ void ProblemGenerator::CallProblemGenerator(ParameterInput *pin, bool is_restart
     Monopole(pin, is_restart);
   } else if (pgen_fun_name.compare("mri3d") == 0) {
     MRI3d(pin, is_restart);
+  } else if (pgen_fun_name.compare("newtonian_bondi") == 0 ||
+             pgen_fun_name.compare("parker_wind") == 0) {
+    NewtonianSphericalFlow(pin, is_restart);
   } else if (pgen_fun_name.compare("orszag_tang") == 0) {
     OrszagTang(pin, is_restart);
   } else if (pgen_fun_name.compare("rad_linear_wave") == 0) {

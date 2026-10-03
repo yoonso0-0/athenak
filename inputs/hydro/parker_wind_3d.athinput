@@ -1,0 +1,84 @@
+# AthenaK input file: 3D transonic isothermal Parker wind on a Cartesian mesh.
+#
+# This selects the Parker branch of the built-in newtonian_spherical.cpp problem
+# generator.  The same pgen also supplies Newtonian Bondi accretion when
+# <problem>/pgen_name=newtonian_bondi.
+#
+# The analytic solution is imposed on all six user boundaries.  The spherical_wind mask
+# is reset to the analytic state at its surface by the pgen, so dens and vel_r below are
+# only positive placeholders required while Hydro parses the input.
+
+<comment>
+problem   = 3D transonic isothermal Parker wind
+reference = Parker, E. N., ApJ 128, 664 (1958)
+
+<job>
+basename  = ParkerWind3D
+
+<mesh>
+nghost    = 3
+nx1       = 64
+x1min     = -3.0
+x1max     = 3.0
+ix1_bc    = user
+ox1_bc    = user
+
+nx2       = 64
+x2min     = -3.0
+x2max     = 3.0
+ix2_bc    = user
+ox2_bc    = user
+
+nx3       = 64
+x3min     = -3.0
+x3max     = 3.0
+ix3_bc    = user
+ox3_bc    = user
+
+<meshblock>
+# A single block must contain the mask's origin and its local mirror stencil.
+nx1       = 64
+nx2       = 64
+nx3       = 64
+
+<time>
+evolution  = dynamic
+integrator = rk3
+cfl_number = 0.3
+nlim       = -1
+tlim       = 0.5
+ndiag      = 20
+
+<hydro>
+eos             = isothermal
+iso_sound_speed = 0.7071067811865475  # rs=GM/(2 cs^2)=1 for GM=1
+reconstruct     = ppm4
+rsolver         = roe
+dfloor          = 1.0e-10
+
+<hydro_srcterms>
+point_particle_gravity_at_center = true
+gravity_softening_length         = 0.5  # gravity is Newtonian outside the mask
+
+<problem>
+pgen_name     = parker_wind  # select outflow in newtonian_spherical.cpp
+sonic_density = 1.0          # density at the transonic critical point
+
+<sphere_mask>
+enabled = true
+radius  = 0.5
+bc      = spherical_wind
+# The pgen replaces these positive placeholders with the analytic state at radius:
+# dens=11.4629075 and vel_r=0.24674605 for the parameters above.
+dens    = 1.0
+vel_r   = 1.0
+
+<output1>
+file_type   = hst
+data_format = %.17g
+dt          = 0.05
+
+<output2>
+file_type = bin
+variable  = hydro_w
+dt        = 0.1
