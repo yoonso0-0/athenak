@@ -1,0 +1,86 @@
+# AthenaK input file: spherical inner mask demo, 2D
+# High-resolution (300x300) octant Liska & Wendroff implosion with sphere_mask radius=0.075.
+# As written, the Dirichlet interior state is fixed to dens=1.0, eint=2.5 (the implosion's
+# *exterior* "out" state) with zero velocity -- a fixed reservoir at the ambient state.
+# tst/sphere_mask_demo/run_demo.py runs this one file five ways via command-line overrides:
+#   baseline    sphere_mask/enabled=false
+#   dirichlet1  (as written)
+#   dirichlet2  sphere_mask/vel1=2.0              (supersonic outflow from the "hole")
+#   reflecting  sphere_mask/bc=reflecting
+#   absorbing   sphere_mask/bc=absorbing
+# (dens/vel/eint are only read by bc=dirichlet.)
+
+<comment>
+problem   = spherical inner mask high-resolution implosion demo, 2D
+
+<job>
+basename  = SphereMaskImplosionDemo
+
+<mesh>
+nghost    = 3          # Number of ghost cells (ppm4 needs >= 3)
+nx1       = 300        # Number of zones in X1-direction
+x1min     = 0.0        # minimum value of X1
+x1max     = 0.3        # maximum value of X1
+ix1_bc    = reflect    # inner-X1 boundary flag
+ox1_bc    = reflect    # outer-X1 boundary flag
+
+nx2       = 300        # Number of zones in X2-direction
+x2min     = 0.0        # minimum value of X2
+x2max     = 0.3        # maximum value of X2
+ix2_bc    = reflect    # inner-X2 boundary flag
+ox2_bc    = reflect    # outer-X2 boundary flag
+
+nx3       = 1          # Number of zones in X3-direction
+x3min     = -0.5       # minimum value of X3
+x3max     = 0.5        # maximum value of X3
+ix3_bc    = periodic   # inner-X3 boundary flag
+ox3_bc    = periodic   # outer-X3 boundary flag
+
+<meshblock>
+nx1       = 300        # single MeshBlock spans the full (octant-like) domain
+nx2       = 300
+nx3       = 1
+
+<time>
+evolution  = dynamic    # dynamic/kinematic/static
+integrator = rk2        # time integration algorithm
+cfl_number = 0.4        # The Courant, Friedrichs, & Lewy (CFL) Number
+nlim       = -1         # cycle limit
+tlim       = 2.0        # time limit
+ndiag      = 200        # cycles between diagostic output
+
+<hydro>
+eos         = ideal     # EOS type
+reconstruct = ppm4      # spatial reconstruction method
+rsolver     = hllc      # Riemann-solver to be used
+gamma       = 1.4       # gamma = C_p/C_v
+
+<problem>
+pgen_name = implode     # problem generator name
+# Interior Conditions (near the origin)
+d_in  = 0.125           # density
+p_in  = 0.14            # pressure
+
+# Exterior Conditions
+d_out  = 1.0            # density
+p_out  = 1.0            # pressure
+
+<sphere_mask>
+enabled   = true
+radius    = 0.075       # 2*radius+margin=0.151 << domain size=0.3 (single MeshBlock)
+bc        = dirichlet
+dens      = 1.0         # matches the implosion's exterior ("out") state
+vel1      = 0.0
+vel2      = 0.0
+vel3      = 0.0
+eint      = 2.5
+
+<output1>
+file_type   = hst       # history data dump
+data_format = %12.5e    # optional data format string
+dt          = 0.01      # time increment between outputs
+
+<output2>
+file_type  = bin        # AthenaK native binary dump
+variable   = hydro_w    # variables to be output
+dt         = 0.01       # time increment between outputs

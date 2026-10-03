@@ -1,0 +1,83 @@
+# AthenaK input file: point-particle gravity + spherical inner mask, 2D blast wave pgen
+#
+# Simple combined test of the point-particle 1/r gravity source term
+# (<hydro_srcterms>/point_particle_gravity_at_center) and the spherical inner mask
+# (<sphere_mask>). The blast pgen is used only as a uniform-medium initializer: inner
+# and outer density/pressure are set equal (drat=prat=1), so there is no actual blast --
+# the interesting dynamics come entirely from gas free-falling onto the point mass at
+# the origin, which the spherical mask (radius 0.2, reflecting) then absorbs/reflects at
+# its surface instead of letting it collapse to r=0.
+
+<comment>
+problem   = point-particle gravity + spherical inner mask (Reflecting), 2D blast pgen
+
+<job>
+basename  = SphereMaskGravityBlast
+
+<mesh>
+nghost    = 3          # Number of ghost cells
+nx1       = 400        # Number of zones in X1-direction
+x1min     = -1.0       # minimum value of X1
+x1max     = 1.0        # maximum value of X1
+ix1_bc    = outflow    # inner-X1 boundary flag
+ox1_bc    = outflow    # outer-X1 boundary flag
+
+nx2       = 400        # Number of zones in X2-direction
+x2min     = -1.0       # minimum value of X2
+x2max     = 1.0        # maximum value of X2
+ix2_bc    = outflow    # inner-X2 boundary flag
+ox2_bc    = outflow    # outer-X2 boundary flag
+
+nx3       = 1          # Number of zones in X3-direction (2D)
+x3min     = -0.5       # minimum value of X3
+x3max     = 0.5        # maximum value of X3
+ix3_bc    = periodic   # inner-X3 boundary flag
+ox3_bc    = periodic   # outer-X3 boundary flag
+
+<meshblock>
+nx1       = 400        # single MeshBlock spans the full domain
+nx2       = 400
+nx3       = 1
+
+<time>
+evolution  = dynamic    # dynamic/kinematic/static
+integrator = rk3        # time integration algorithm
+cfl_number = 0.3        # The Courant, Friedrichs, & Lewy (CFL) Number
+nlim       = -1         # cycle limit
+tlim       = 1.5        # time limit
+ndiag      = 200        # cycles between diagostic output
+
+<hydro>
+eos         = ideal     # EOS type
+reconstruct = ppm4       # spatial reconstruction method
+rsolver     = hllc      # Riemann-solver to be used
+gamma       = 1.666666666667 # gamma = C_p/C_v
+
+<hydro_srcterms>
+point_particle_gravity_at_center = true   # GM=1 point mass at the coordinate origin
+gravity_softening_length         = 0.05    # half the sphere_mask radius below
+
+<problem>
+# Uniform medium: inner and outer density/pressure are equal, so this is not actually
+# a blast -- only the point-particle gravity drives the flow.
+outer_radius = 0.1      # rout (ramp region, irrelevant here since drat=prat=1)
+inner_radius = 0.1      # thickness of ramp: rin = rout - inner_radius = 0.0
+dn_amb       = 1.0      # ambient (and interior) density
+pn_amb       = 1.0      # ambient (and interior) pressure
+drat         = 1.0      # density ratio: same inside and outside
+prat         = 1.0      # pressure ratio: same inside and outside
+
+<sphere_mask>
+enabled   = true
+radius    = 0.1         # 2*radius+margin=0.41 << half-domain=1.0 in every direction
+bc        = reflecting
+
+<output1>
+file_type   = hst        # history data dump
+data_format = %12.5e     # optional data format string
+dt          = 0.02       # time increment between outputs
+
+<output2>
+file_type  = bin         # AthenaK native binary dump
+variable   = hydro_w     # variables to be output
+dt         = 0.01        # time increment between outputs
