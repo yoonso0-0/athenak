@@ -1,0 +1,97 @@
+# AthenaK input file: spherical inner mask split across 2x2x2 MeshBlocks, 3D
+#
+# Domain symmetric about the origin and divided into 2x2x2 = 8 MeshBlocks whose corners
+# meet exactly AT the origin, so the masked sphere is cut into eight octants and each is
+# masked by the block that owns it. This is the layout that <meshblock>/nx = 2^N per axis
+# always produces on a symmetric domain, and all four BCs support it.
+#
+# What makes it work is that the mask is applied BEFORE the halo exchange, so SendU/RecvU
+# carry finished masked values and no block ever has to reconstruct a neighbour's masked
+# cells. That ordering is not cosmetic: masked cells are overwritten every stage, but
+# their values are the boundary condition -- they feed the reconstruction stencil of the
+# UNMASKED cells just outside r=radius. Masking only at the end of the stage leaves a
+# neighbour's copy one stage stale and corrupts the real solution.
+#
+# The one constraint left is reach, and it applies to reflecting/absorbing only: they
+# interpolate the exterior state at a mirror point up to 2*radius from the origin, which
+# must land in the same MeshBlock as the masked cell. Here each block reaches 0.3 against
+# 2*radius+margin = 0.1125, so all four BCs run. Going to 8x8x8 (<meshblock>/nx = 6)
+# drops the reach to 0.075 and must make reflecting/absorbing fail at startup, while
+# dirichlet/spherical_wind still run.
+#
+# The regression test runs this file for each BC twice -- as written (8 blocks) and with
+# <meshblock>/nx = 48 (1 block) -- and requires the two to agree cell by cell.
+
+<comment>
+problem   = spherical inner mask, 2x2x2 octant-split symmetric domain, 3D
+
+<job>
+basename  = SphereMaskOctantSplit3D
+
+<mesh>
+nghost    = 2          # Number of ghost cells
+nx1       = 48         # Number of zones in X1-direction
+x1min     = -0.3       # symmetric about 0, so a 2^N split always lands a face on the
+x1max     = 0.3        # origin -- here the 2x2x2 block corners meet there
+ix1_bc    = reflect    # inner-X1 boundary flag
+ox1_bc    = reflect    # outer-X1 boundary flag
+
+nx2       = 48         # Number of zones in X2-direction
+x2min     = -0.3       # minimum value of X2
+x2max     = 0.3        # maximum value of X2
+ix2_bc    = reflect    # inner-X2 boundary flag
+ox2_bc    = reflect    # outer-X2 boundary flag
+
+nx3       = 48         # Number of zones in X3-direction
+x3min     = -0.3       # minimum value of X3
+x3max     = 0.3        # maximum value of X3
+ix3_bc    = reflect    # inner-X3 boundary flag
+ox3_bc    = reflect    # outer-X3 boundary flag
+
+<meshblock>
+nx1       = 24         # 2x2x2 = 8 MeshBlocks meeting exactly at the origin
+nx2       = 24
+nx3       = 24
+
+<time>
+evolution  = dynamic    # dynamic/kinematic/static
+integrator = rk2        # time integration algorithm
+cfl_number = 0.4        # The Courant, Friedrichs, & Lewy (CFL) Number
+nlim       = -1         # cycle limit
+tlim       = 0.1        # time limit
+ndiag      = 200        # cycles between diagostic output
+
+<hydro>
+eos         = ideal     # EOS type
+reconstruct = plm       # spatial reconstruction method
+rsolver     = llf       # Riemann-solver to be used
+gamma       = 1.4       # gamma = C_p/C_v
+
+<problem>
+pgen_name = implode     # problem generator name
+# Interior Conditions (near the origin)
+d_in  = 0.125           # density
+p_in  = 0.14            # pressure
+
+# Exterior Conditions
+d_out  = 1.0            # density
+p_out  = 1.0            # pressure
+radial_jump_radius = -1.0 # optional reflection-symmetric test mode
+
+<sphere_mask>
+enabled   = true
+radius    = 0.05        # 4 cells in radius (dx = 0.0125); spans all 8 blocks
+bc        = spherical_wind
+dens      = 2.0         # pinned density inside the mask
+eint      = 20.0        # pinned internal energy density inside the mask
+vel_r     = 0.5         # outward radial velocity at the mask surface (>0 = wind)
+
+<output1>
+file_type   = hst       # history data dump
+data_format = %12.5e    # optional data format string
+dt          = 0.02      # time increment between outputs
+
+<output2>
+file_type  = bin        # AthenaK native binary dump
+variable   = hydro_w    # variables to be output
+dt         = 0.02       # time increment between outputs
