@@ -200,6 +200,9 @@ void Hydro::InitSphereMask(ParameterInput *pin) {
   // spherical_wind target radial velocity (unused otherwise); sign: >0 outward (wind),
   // <0 inward (accretion)
   sm_velr = pin->GetOrAddReal("sphere_mask","vel_r",0.0);
+  // passive scalar value inside the mask for dirichlet/spherical_wind (reflecting and
+  // absorbing hold s = 0)
+  sm_scalar = pin->GetOrAddReal("sphere_mask","scalar",0.0);
   if (sphere_mask_bc == SphereMaskBC::dirichlet ||
       sphere_mask_bc == SphereMaskBC::spherical_wind) {
     if (!(sm_dens > 0.0)) {
@@ -411,6 +414,8 @@ TaskStatus Hydro::MaskSphereImpl(bool pre) {
   SphereMaskBC bc = sphere_mask_bc;
   Real dens0 = sm_dens, v10 = sm_vel1, v20 = sm_vel2, v30 = sm_vel3, eint0 = sm_eint;
   Real velr0 = sm_velr;
+  Real scal0 = sm_scalar;
+  int nhyd = nhydro, nscal = nscalars;
 
   // The end-of-stage pass also pins ghost cells lying inside the mesh, so a block's ghost
   // copy of a neighbour's piece of the sphere holds the prescribed state exactly and not
@@ -559,6 +564,15 @@ TaskStatus Hydro::MaskSphereImpl(bool pre) {
     u0_(m,IM2,k,j,i) = ucons.my;
     u0_(m,IM3,k,j,i) = ucons.mz;
     if (eos.is_ideal) { u0_(m,IEN,k,j,i) = ucons.e; }
+
+    // passive scalars: the prescribed value for the pointwise BCs, zero for the mirror
+    // BCs, so mask material is tagged only where the mask injects gas
+    Real s_new = (bc == SphereMaskBC::dirichlet || bc == SphereMaskBC::spherical_wind) ?
+                 scal0 : 0.0;
+    for (int n=nhyd; n<(nhyd+nscal); ++n) {
+      w0_(m,n,k,j,i) = s_new;
+      u0_(m,n,k,j,i) = dens_new*s_new;
+    }
   });
 
   return TaskStatus::complete;

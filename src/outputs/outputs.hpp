@@ -188,6 +188,7 @@ struct HistoryData {
   std::string label[NHISTORY_VARIABLES];
   Real hdata[NHISTORY_VARIABLES];
   bool header_written;
+  int symmetry_factor = 1;  // Reflected copies represented; standard histories use 1
   int user_index;         // UserDefined only: position of this file among the user files
   std::string user_tag;   // UserDefined only: file name suffix, ".user.<tag>.hst" if set
   // constructor

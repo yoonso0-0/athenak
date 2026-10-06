@@ -7,12 +7,13 @@
 # produced.
 #
 # Scales (GM=1, dens_inf=1, cs_inf=0.5, vel_inf=1):
-#   accretion radius   r_acc = 2GM/(v^2 + cs^2)               = 1.6
+#   accretion radius   R_B = 2GM/(v^2 + cs^2)               = 1.6
 #   Bondi-Hoyle rate   Mdot  = 4 pi (GM)^2 rho/(v^2+cs^2)^1.5 = 8.992
 #   Hoyle-Lyttleton    Mdot  = 4 pi (GM)^2 rho/v^3            = 12.57
-# The mask is a boundary condition, not a sink, so measure the rate as an inward flux
-# through a shell outside it (flux_radii). Here r_mask = 0.625 r_acc is large enough to
-# affect the answer: this is a feature test, not a converged BHL calculation.
+# These are reference rates without the injected wind. Measure net inflow as minus the
+# outward flux through a sphere outside the mask (flux_radii). Here r_mask = 0.625 R_B
+# is large enough to affect the answer: this is a feature test, not a converged BHL
+# calculation.
 #
 # Mesh: one quadrant, x2 >= 0 and x3 >= 0, with reflecting symmetry planes at x2 = 0 and
 # x3 = 0; the user history integrals are those of the full domain.
@@ -26,8 +27,8 @@ basename  = BHLWindTunnel3D
 <mesh>
 nghost    = 3          # Number of ghost cells (3 required by ppm4)
 nx1       = 160        # Number of zones in X1-direction (dx = 0.1)
-x1min     = -4.0       # minimum value of X1: 2.5 accretion radii upstream
-x1max     = 12.0       # maximum value of X1: 7.5 accretion radii of wake
+x1min     = -8.0       # minimum value of X1: 5 accretion radii upstream
+x1max     = 8.0       # maximum value of X1: 5 accretion radii downstream
 ix1_bc    = user       # upstream face: held at the uniform wind state
 ox1_bc    = outflow    # downstream face: the wake must be able to leave
 
@@ -61,6 +62,7 @@ eos         = ideal     # EOS type
 reconstruct = ppm4      # spatial reconstruction method
 rsolver     = hllc      # Riemann-solver to be used
 gamma       = 1.666666666667 # gamma = C_p/C_v (no upper bound for this problem)
+nscalars    = 1         # passive scalar s: mass fraction of wind material from the mask
 
 <hydro_srcterms>
 point_particle_gravity_at_center = true   # GM=1 point mass at the coordinate origin
@@ -68,11 +70,11 @@ gravity_softening_length         = 0.1    # no larger than the sphere_mask radiu
 
 <problem>
 pgen_name = bhl_wind_tunnel
-user_hist = true         # user history output, one .user.<tag>.hst file per radius below
-flux_radii = 1.01, 2.0   # mass and momentum fluxes through these spheres (flux0, ...)
+user_hist = true        # flux<n>, vol<n>, and optional domain history files
+flux_radii = 1.01, 2.0   # mass, momentum and scalar fluxes through these spheres
 flux_nlev = 10           # 10*nlev^2+2 points (default 5)
-volume_radii = 2.0, 1000 # gravitational force of the shells volume_rmin <= r < radius
-volume_rmin = 1.0        # inner radius of those shells, >= gravity_softening_length
+volume_radii = 2.0, 1000 # domain columns integrated over sphere_mask radius <= r < radius
+domain_hist = true      # mass, scal-0, dPx, dPx_s, fgrav1, fgrav1_s, DF_wind, DF_outflow
 dens_inf  = 1.0         # upstream density
 cs_inf    = 0.5         # upstream sound speed
 vel_inf   = 1.0         # upstream speed (Mach 2 for cs_inf = 0.5)
@@ -84,10 +86,11 @@ bc        = spherical_wind   # inner BC, not a mass sink; bc=reflecting gives a 
 dens      = 1.0
 eint      = 2.5
 vel_r     = 1.0
+scalar    = 1.0              # passive scalar s in the mask (s = 0 upstream)
 
 <output1>
 file_type   = hst       # history data dump
-data_format = %.10e     # optional data format string (11 significant digits)
+data_format = %12.4e    # optional data format string (5 significant digits)
 dt          = 1.0       # time increment between outputs
 
 <output2>

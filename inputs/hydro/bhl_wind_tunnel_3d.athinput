@@ -7,12 +7,12 @@
 # analytic solution, so no error output is produced.
 #
 # Scales (GM=1, dens_inf=1, cs_inf=1, vel_inf=2):
-#   accretion radius   r_acc = 2GM/(v^2 + cs^2)               = 0.4
+#   accretion radius   R_B = 2GM/(v^2 + cs^2)               = 0.4
 #   Bondi-Hoyle rate   Mdot  = 4 pi (GM)^2 rho/(v^2+cs^2)^1.5 = 1.124
 #   Hoyle-Lyttleton    Mdot  = 4 pi (GM)^2 rho/v^3            = 1.571
-# A measured rate should lie between the two. The mask is a boundary condition, not a
-# sink, so measure the rate as minus the outward flux through a shell outside it. Here
-# r_mask = 0.25 r_acc is large enough to affect the answer: this is a feature test, not a
+# These are reference estimates. The mask is a boundary condition, not a sink, so
+# measure net inflow as minus the outward flux through a sphere outside it. Here
+# r_mask = 0.25 R_B is large enough to affect the answer: this is a feature test, not a
 # converged BHL calculation.
 #
 # Mesh: one MeshBlock holds the whole domain (an absorbing mask needs each block holding
@@ -77,9 +77,8 @@ pgen_name = bhl_wind_tunnel
 user_hist = true
 flux_radii = 0.25, 0.5  # outward mass and momentum fluxes through spheres of these radii
 flux_nlev = 5           # geodesic grid level of those spheres, 10*nlev^2+2 points
-volume_radii = 1.5, 2.0 # gravitational force of the gas in volume_rmin <= r < radius on the mass
-volume_rmin = 1.0       # inner radius of those shells, at least gravity_softening_length
-domain_hist = true      # mass, gravity on the mass and momentum change outside the mask
+volume_radii = 1.5, 2.0 # domain columns integrated over sphere_mask radius <= r < radius
+domain_hist = true     # mass, dPx, fgrav1 outside the mask (no passive scalar)
 dens_inf  = 1.0         # upstream density
 cs_inf    = 1.0         # upstream sound speed
 vel_inf   = 2.0         # upstream speed (Mach 2 for cs_inf = 1)

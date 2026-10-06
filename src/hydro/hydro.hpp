@@ -145,6 +145,9 @@ class Hydro {
   // Dirichlet/spherical_wind target state; eint (not pressure) is specified directly
   Real sm_dens, sm_vel1, sm_vel2, sm_vel3, sm_eint;
   Real sm_velr = 0.0;              // spherical_wind: prescribed radial velocity magnitude
+  // passive scalar value s held in every scalar slot inside the mask for
+  // Dirichlet/spherical_wind; Reflecting/Absorbing hold s = 0
+  Real sm_scalar = 0.0;
   // true for Reflecting/Absorbing, which interpolate the exterior state at a mirror
   // point; false for the pointwise Dirichlet/Spherical Wind, which read no neighbours.
   // Set once by InitSphereMask and used to pick which of the two mask passes runs.
