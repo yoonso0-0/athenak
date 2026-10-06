@@ -84,8 +84,9 @@ void HistoryOutput::LoadOutputData(Mesh *pm) {
 
 //----------------------------------------------------------------------------------------
 //! \fn void HistoryOutput::LoadHydroHistoryData()
-//  \brief Compute and store history data over all MeshBlocks on this rank
-//  Data is stored in a Real array defined in derived class.
+//! \brief Compute volume integrals over active cells on this MPI rank,
+//! including any internal mask cells, and store them in pdata->hdata.
+//! Standard hydro histories have no mirror symmetry scaling.
 
 void HistoryOutput::LoadHydroHistoryData(HistoryData *pdata, Mesh *pm) {
   auto &eos_data = pm->pmb_pack->phydro->peos->eos_data;
@@ -436,10 +437,17 @@ void HistoryOutput::WriteOutputFile(Mesh *pm, ParameterInput *pin) {
         exit(EXIT_FAILURE);
       }
 
-      // Write header, if it has not been written already
+      // Header lines: format marker, represented symmetry factor, any problem-specific
+      // parameters (header_params), column labels.
+      // Each output instance appends its header once, including after restart.
       if (!(data.header_written)) {
         int iout = 1;
         std::fprintf(pfile,"# Athena++ history data\n");
+        std::fprintf(pfile,"# symmetry_factor=%d\n", data.symmetry_factor);
+        for (const auto &param : data.header_params) {
+          std::fprintf(pfile,"# %s=%.10g\n", param.first.c_str(),
+                       static_cast<double>(param.second));
+        }
         std::fprintf(pfile,"#  [%d]=time      ", iout++);
         std::fprintf(pfile,"[%d]=dt       ", iout++);
         for (int n=0; n<data.nhist; ++n) {
