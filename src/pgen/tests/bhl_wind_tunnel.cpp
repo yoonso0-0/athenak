@@ -15,9 +15,9 @@
 //!
 //! The initial state is the uniform wind, evolved until the wake settles. The length
 //! scale is the accretion radius r_acc = 2GM/(vel_inf^2 + cs_inf^2). Startup prints the
-//! Hoyle-Lyttleton and Bondi-Hoyle rate estimates (and the Bondi rate where it exists,
-//! gamma < 5/3); measured rates should lie between them and depend on the mask radius
-//! until it is small compared with r_acc.
+//! upstream and mask-wind states and the Hoyle-Lyttleton and Bondi-Hoyle rate estimates
+//! (and the Bondi rate where it exists, gamma < 5/3); measured rates should lie between
+//! them and depend on the mask radius until it is small compared with r_acc.
 //!
 //! Ideal and isothermal EOS are supported (isothermal takes cs from
 //! <hydro>/iso_sound_speed). The mesh may be 2D (a cheap qualitative pilot, still with
@@ -340,6 +340,70 @@ void BHLUserHistory(HistoryData *pdata, Mesh *pm) {
   }
 }
 
+//----------------------------------------------------------------------------------------
+//! \fn void PrintSetup()
+//! \brief Startup summary on rank 0: the upstream flow, the mask wind, the accretion rate
+//! estimates, and the user history files.
+
+void PrintSetup(hydro::Hydro *phydro, const std::vector<std::string> &tags,
+                const std::vector<std::unique_ptr<SphericalGrid>> &grids) {
+  auto &eos = phydro->peos->eos_data;
+  const WindTunnelData &p = wind_tunnel;
+  std::cout << std::endl
+            << "BHL wind tunnel (GM = 1) : r_acc = " << p.r_acc
+            << ", mach_inf = " << p.vel_inf/p.cs_inf << std::endl
+            << "- dens_inf = " << p.dens_inf << std::endl
+            << "- vel_inf = " << p.vel_inf << std::endl
+            << "- cs_inf = " << p.cs_inf << std::endl;
+
+  if (phydro->sphere_mask_bc == hydro::Hydro::SphereMaskBC::spherical_wind) {
+    const Real cs_mask = p.is_ideal
+        ? sqrt(eos.gamma*(eos.gamma - 1.0)*phydro->sm_eint/phydro->sm_dens)
+        : eos.iso_cs;
+    std::cout << std::endl
+              << "Spherical wind from the mask: mach_mask = "
+              << phydro->sm_velr/cs_mask << std::endl
+              << "- dens = " << phydro->sm_dens << std::endl
+              << "- vel_r = " << phydro->sm_velr << std::endl
+              << "- cs = " << cs_mask << std::endl;
+  }
+
+  const Real gm2rho = p.dens_inf;  // (GM)^2 dens_inf, with GM=1
+  std::cout << std::endl
+            << "Accretion rate estimates:" << std::endl
+            << "- mdot_bhl = "
+            << 4.0*M_PI*gm2rho/pow(SQR(p.vel_inf) + SQR(p.cs_inf), 1.5) << std::endl
+            << "- mdot_hl = "
+            << 4.0*M_PI*gm2rho/(SQR(p.vel_inf)*p.vel_inf) << std::endl;
+  // The Bondi rate exists only where the spherical transonic solution does.
+  const Real gamma = p.is_ideal ? eos.gamma : 1.0;
+  const Real q = 5.0 - 3.0*gamma;
+  if (q > 0.0) {
+    const Real lambda = p.is_ideal ? 0.25*pow(2.0/q, 0.5*q/(gamma - 1.0))
+                                   : 0.25*exp(1.5);
+    std::cout << "- mdot_bondi = "
+              << 4.0*M_PI*lambda*gm2rho/(SQR(p.cs_inf)*p.cs_inf) << std::endl;
+  }
+
+  if (!tags.empty()) {
+    std::cout << std::endl
+              << "User history files <basename>.user.<tag>.hst:" << std::endl;
+    for (int n = 0; n < static_cast<int>(tags.size()); ++n) {
+      std::cout << "- " << tags[n] << ": ";
+      if (n < nflux_files) {
+        std::cout << "fluxes through the sphere r = " << grids[n]->radius;
+      } else if (n < nflux_files + static_cast<int>(volume_radii.size())) {
+        std::cout << "gravitational force of the shell " << volume_rmin
+                  << " <= r < " << volume_radii[n - nflux_files];
+      } else {
+        std::cout << "mass, gravitational force and momentum change of the domain "
+                  << "outside the mask";
+      }
+      std::cout << std::endl;
+    }
+  }
+}
+
 } // namespace
 
 //----------------------------------------------------------------------------------------
@@ -495,25 +559,10 @@ void ProblemGenerator::BHLWindTunnel(ParameterInput *pin, const bool restart) {
     }
 
     if (has_domain) user_hist_tags.push_back("domain");
-
-    if (global_variable::my_rank == 0) {
-      std::cout << "BHL user history files <basename>.user.<tag>.hst:" << std::endl;
-      for (int n = 0; n < static_cast<int>(user_hist_tags.size()); ++n) {
-        std::cout << "  " << user_hist_tags[n] << ": ";
-        if (n < nflux_files) {
-          std::cout << "fluxes through the sphere r=" << spherical_grids[n]->radius;
-        } else if (n < nflux_files + static_cast<int>(volume_radii.size())) {
-          std::cout << "gravitational force of the shell, outer r="
-                    << volume_radii[n - nflux_files];
-        } else {
-          std::cout << "mass, gravitational force and momentum change of the domain "
-                    << "outside the mask";
-        }
-        std::cout << std::endl;
-      }
-    }
     user_hist_func = BHLUserHistory;
   }
+
+  if (global_variable::my_rank == 0) PrintSetup(phydro, user_hist_tags, spherical_grids);
 
   if (restart) return;
 
@@ -538,38 +587,4 @@ void ProblemGenerator::BHLWindTunnel(ParameterInput *pin, const bool restart) {
   });
 
   phydro->peos->PrimToCons(w0, phydro->u0, is, ie, js, je, ks, ke);
-
-  if (global_variable::my_rank == 0) {
-    const Real gm2rho = wind_tunnel.dens_inf;  // (GM)^2 dens_inf, with GM=1
-    const Real mdot_hl = 4.0*M_PI*gm2rho/(SQR(wind_tunnel.vel_inf)*wind_tunnel.vel_inf);
-    const Real mdot_bhl = 4.0*M_PI*gm2rho
-                          /pow(SQR(wind_tunnel.vel_inf) + SQR(wind_tunnel.cs_inf), 1.5);
-    std::cout << "BHL wind tunnel (GM=1): vel_inf=" << wind_tunnel.vel_inf
-              << "  cs_inf=" << wind_tunnel.cs_inf
-              << "  mach_inf=" << wind_tunnel.vel_inf/wind_tunnel.cs_inf
-              << "  r_acc=" << wind_tunnel.r_acc
-              << "  r_mask/r_acc="
-              << phydro->sphere_mask_radius/wind_tunnel.r_acc << std::endl;
-    if (phydro->sphere_mask_bc == hydro::Hydro::SphereMaskBC::spherical_wind) {
-      // v_esc at the mask surface sets whether the injected wind escapes or falls back
-      std::cout << "BHL wind tunnel mask wind: dens=" << phydro->sm_dens
-                << "  eint=" << phydro->sm_eint
-                << "  vel_r=" << phydro->sm_velr
-                << "  v_esc(r_mask)=" << sqrt(2.0/phydro->sphere_mask_radius)
-                << std::endl;
-    }
-    std::cout << "BHL wind tunnel rate estimates: mdot_bhl=" << mdot_bhl
-              << "  mdot_hl=" << mdot_hl;
-    // The Bondi rate exists only where the spherical transonic solution does.
-    const Real gamma = wind_tunnel.is_ideal ? eos.gamma : 1.0;
-    const Real q = 5.0 - 3.0*gamma;
-    if (q > 0.0) {
-      const Real lambda = wind_tunnel.is_ideal ? 0.25*pow(2.0/q, 0.5*q/(gamma - 1.0))
-                                               : 0.25*exp(1.5);
-      const Real mdot_b = 4.0*M_PI*lambda*gm2rho
-                          /(SQR(wind_tunnel.cs_inf)*wind_tunnel.cs_inf);
-      std::cout << "  mdot_bondi=" << mdot_b;
-    }
-    std::cout << std::endl;
-  }
 }
