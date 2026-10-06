@@ -76,6 +76,7 @@ fofc        = true     # first-order flux correction: the wind driving into the 
                        # pressure/density right outside the mask
 dfloor      = 1.0e-6   # far below anything physical here (ambient density is 1), so the
 pfloor      = 1.0e-8   # floors only ever catch a genuine solver failure
+nscalars    = 1        # passive scalar s: mass fraction of wind material from the mask
 
 <hydro_srcterms>
 point_particle_gravity_at_center = true   # GM=1 point mass at the coordinate origin
@@ -90,13 +91,14 @@ vel_inf   = 0.6        # upstream speed, Mach 2: SUPERSONIC wind
 
 <sphere_mask>
 enabled   = true
-radius    = 1.0        # 0.23 r_acc (supersonic: r_acc = 2GM/(vel_inf^2+cs_inf^2) = 4.44)
+radius    = 1.0        # 0.23 R_B (supersonic: R_B = 2GM/(vel_inf^2+cs_inf^2) = 4.44)
 bc        = spherical_wind
 dens      = 0.1        # density of the injected wind at the mask surface
 eint      = 0.5        # energy density of the injected wind (p_w = (gamma-1)*eint = 0.333,
                        # NOT specific internal energy -- see hydro_sphere_mask.cpp, w0_(IEN)
                        # is set directly from this value with no density factor)
 vel_r     = 2.0        # outward radial velocity at the mask surface (>0 = wind)
+scalar    = 1.0        # passive scalar s in the mask (s = 0 upstream)
 
 <output1>
 file_type   = hst      # history data dump

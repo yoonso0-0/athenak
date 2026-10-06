@@ -4,7 +4,7 @@
 # mask), exercising the nhydro=4 path. The sound speed is <hydro>/iso_sound_speed, so
 # <problem>/cs_inf is not read; the wind is still set by <problem>/vel_inf.
 #
-# Scales are those of the ideal companion (r_acc = 0.4, Mdot_BHL = 1.124, Mdot_HL = 1.571),
+# Scales are those of the ideal companion (R_B = 0.4, Mdot_BHL = 1.124, Mdot_HL = 1.571),
 # plus the spherical Bondi limit Mdot = 4 pi lambda (GM)^2 rho/c_iso^3 = 14.08 with
 # lambda = e^1.5/4, printed at startup for reference.
 #
@@ -68,9 +68,8 @@ pgen_name = bhl_wind_tunnel
 user_hist = true
 flux_radii = 0.25, 0.5  # outward mass and momentum fluxes through spheres of these radii
 flux_nlev = 5           # geodesic grid level of those spheres, 10*nlev^2+2 points
-volume_radii = 1.5, 2.0 # gravitational force of the gas in volume_rmin <= r < radius on the mass
-volume_rmin = 1.0       # inner radius of those shells, at least gravity_softening_length
-domain_hist = true      # mass, gravity on the mass and momentum change outside the mask
+volume_radii = 1.5, 2.0 # domain columns integrated over sphere_mask radius <= r < radius
+domain_hist = true     # mass, dPx, fgrav1 outside the mask (no passive scalar)
 dens_inf  = 1.0         # upstream density
 vel_inf   = 2.0         # upstream speed (Mach 2 for iso_sound_speed = 1)
 # cs_inf is not read for an isothermal EOS: <hydro>/iso_sound_speed sets it instead.

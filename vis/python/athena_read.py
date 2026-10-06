@@ -106,6 +106,9 @@ def hst(filename, raw=False):
         # Parse header
         data_file.seek(header_location)
         header = data_file.readline()
+        # New histories record symmetry metadata before the column labels.
+        if header.startswith('# symmetry_factor='):
+            header = data_file.readline()
         data_names = re.findall(r'\[\d+\]=(\S+)', header)
         if len(data_names) == 0:
             raise RuntimeError('athena_read.hst: Could not parse header')
