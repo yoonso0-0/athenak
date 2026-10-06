@@ -1,0 +1,96 @@
+# AthenaK input file: 3D Bondi-Hoyle-Lyttleton wind tunnel, ideal EOS
+#
+# A uniform Mach-2 wind blows along +x1 past the GM=1 point mass from
+# <hydro_srcterms>/point_particle_gravity_at_center, with the singular center replaced by
+# a <sphere_mask> that injects a spherical wind. Gravity focuses the flow onto the
+# downstream axis, where it shocks. There is no analytic solution, so no error output is
+# produced.
+#
+# Scales (GM=1, dens_inf=1, cs_inf=0.5, vel_inf=1):
+#   accretion radius   r_acc = 2GM/(v^2 + cs^2)               = 1.6
+#   Bondi-Hoyle rate   Mdot  = 4 pi (GM)^2 rho/(v^2+cs^2)^1.5 = 8.992
+#   Hoyle-Lyttleton    Mdot  = 4 pi (GM)^2 rho/v^3            = 12.57
+# The mask is a boundary condition, not a sink, so measure the rate as an inward flux
+# through a shell outside it (flux_radii). Here r_mask = 0.625 r_acc is large enough to
+# affect the answer: this is a feature test, not a converged BHL calculation.
+#
+# Mesh: one quadrant, x2 >= 0 and x3 >= 0, with reflecting symmetry planes at x2 = 0 and
+# x3 = 0; the user history integrals are those of the full domain.
+
+<comment>
+problem   = 3D BHL wind tunnel: uniform Mach-2 wind past a masked GM=1 point mass
+
+<job>
+basename  = BHLWindTunnel3D
+
+<mesh>
+nghost    = 3          # Number of ghost cells (3 required by ppm4)
+nx1       = 160        # Number of zones in X1-direction (dx = 0.1)
+x1min     = -4.0       # minimum value of X1: 2.5 accretion radii upstream
+x1max     = 12.0       # maximum value of X1: 7.5 accretion radii of wake
+ix1_bc    = user       # upstream face: held at the uniform wind state
+ox1_bc    = outflow    # downstream face: the wake must be able to leave
+
+nx2       = 40         # Number of zones in X2-direction (dx = 0.1)
+x2min     = 0.0        # minimum value of X2
+x2max     = 4.0        # maximum value of X2
+ix2_bc    = reflect    # symmetry plane through the point mass
+ox2_bc    = outflow
+
+nx3       = 40         # Number of zones in X3-direction (dx = 0.1)
+x3min     = 0.0        # minimum value of X3
+x3max     = 4.0        # maximum value of X3
+ix3_bc    = reflect    # symmetry plane through the point mass
+ox3_bc    = outflow
+
+<meshblock>
+nx1       = 20
+nx2       = 20
+nx3       = 20
+
+<time>
+evolution  = dynamic    # dynamic/kinematic/static
+integrator = rk2        # time integration algorithm
+cfl_number = 0.3        # The Courant, Friedrichs, & Lewy (CFL) Number
+nlim       = -1         # cycle limit
+tlim       = 20.0       # time limit
+ndiag      = 100        # cycles between diagostic output
+
+<hydro>
+eos         = ideal     # EOS type
+reconstruct = ppm4      # spatial reconstruction method
+rsolver     = hllc      # Riemann-solver to be used
+gamma       = 1.666666666667 # gamma = C_p/C_v (no upper bound for this problem)
+
+<hydro_srcterms>
+point_particle_gravity_at_center = true   # GM=1 point mass at the coordinate origin
+gravity_softening_length         = 0.1    # no larger than the sphere_mask radius
+
+<problem>
+pgen_name = bhl_wind_tunnel
+user_hist = true         # user history output, one .user.<tag>.hst file per radius below
+flux_radii = 1.01, 2.0   # mass and momentum fluxes through these spheres (flux0, ...)
+flux_nlev = 10           # 10*nlev^2+2 points (default 5)
+volume_radii = 2.0, 1000 # gravitational force of the shells volume_rmin <= r < radius
+volume_rmin = 1.0        # inner radius of those shells, >= gravity_softening_length
+dens_inf  = 1.0         # upstream density
+cs_inf    = 0.5         # upstream sound speed
+vel_inf   = 1.0         # upstream speed (Mach 2 for cs_inf = 0.5)
+
+<sphere_mask>
+enabled   = true
+radius    = 1.0              # mask radius, 0.625 of the accretion radius 1.6
+bc        = spherical_wind   # inner BC, not a mass sink; bc=reflecting gives a solid body
+dens      = 1.0
+eint      = 2.5
+vel_r     = 1.0
+
+<output1>
+file_type   = hst       # history data dump
+data_format = %.10e     # optional data format string (11 significant digits)
+dt          = 1.0       # time increment between outputs
+
+<output2>
+file_type  = bin        # AthenaK native binary dump
+variable   = hydro_w    # variables to be output
+dt         = 1.0        # time increment between outputs
