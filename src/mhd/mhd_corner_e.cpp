@@ -174,26 +174,40 @@ TaskStatus MHD::CornerE(Driver *pdriver, int stage) {
       e1(m,ks  ,j,i) = e1x2_(m,ks,j,i);
       e1(m,ke+1,j,i) = e1x2_(m,ks,j,i);
 
+      // upwind on the sign of the mass flux; average when it vanishes so that the
+      // selection is symmetric under reflection (Gardiner & Stone 2005)
       Real e3_l2, e3_r2, e3_l1, e3_r1;
-      if (flx1(m,IDN,ks,j-1,i) >= 0.0) {
+      if (flx1(m,IDN,ks,j-1,i) > 0.0) {
         e3_l2 = e3x2_(m,ks,j,i-1) - e3cc_(m,ks,j-1,i-1);
-      } else {
+      } else if (flx1(m,IDN,ks,j-1,i) < 0.0) {
         e3_l2 = e3x2_(m,ks,j,i  ) - e3cc_(m,ks,j-1,i  );
+      } else {
+        e3_l2 = 0.5*((e3x2_(m,ks,j,i-1) - e3cc_(m,ks,j-1,i-1)) +
+                     (e3x2_(m,ks,j,i  ) - e3cc_(m,ks,j-1,i  )));
       }
-      if (flx1(m,IDN,ks,j,i) >= 0.0) {
+      if (flx1(m,IDN,ks,j,i) > 0.0) {
         e3_r2 = e3x2_(m,ks,j,i-1) - e3cc_(m,ks,j  ,i-1);
-      } else {
+      } else if (flx1(m,IDN,ks,j,i) < 0.0) {
         e3_r2 = e3x2_(m,ks,j,i  ) - e3cc_(m,ks,j  ,i  );
+      } else {
+        e3_r2 = 0.5*((e3x2_(m,ks,j,i-1) - e3cc_(m,ks,j  ,i-1)) +
+                     (e3x2_(m,ks,j,i  ) - e3cc_(m,ks,j  ,i  )));
       }
-      if (flx2(m,IDN,ks,j,i-1) >= 0.0) {
+      if (flx2(m,IDN,ks,j,i-1) > 0.0) {
         e3_l1 = e3x1_(m,ks,j-1,i) - e3cc_(m,ks,j-1,i-1);
-      } else {
+      } else if (flx2(m,IDN,ks,j,i-1) < 0.0) {
         e3_l1 = e3x1_(m,ks,j  ,i) - e3cc_(m,ks,j  ,i-1);
-      }
-      if (flx2(m,IDN,ks,j,i) >= 0.0) {
-        e3_r1 = e3x1_(m,ks,j-1,i) - e3cc_(m,ks,j-1,i  );
       } else {
+        e3_l1 = 0.5*((e3x1_(m,ks,j-1,i) - e3cc_(m,ks,j-1,i-1)) +
+                     (e3x1_(m,ks,j  ,i) - e3cc_(m,ks,j  ,i-1)));
+      }
+      if (flx2(m,IDN,ks,j,i) > 0.0) {
+        e3_r1 = e3x1_(m,ks,j-1,i) - e3cc_(m,ks,j-1,i  );
+      } else if (flx2(m,IDN,ks,j,i) < 0.0) {
         e3_r1 = e3x1_(m,ks,j  ,i) - e3cc_(m,ks,j  ,i  );
+      } else {
+        e3_r1 = 0.5*((e3x1_(m,ks,j-1,i) - e3cc_(m,ks,j-1,i  )) +
+                     (e3x1_(m,ks,j  ,i) - e3cc_(m,ks,j  ,i  )));
       }
       e3(m,ks,j,i) = 0.25*(e3_l1 + e3_r1 + e3_l2 + e3_r2 +
              e3x2_(m,ks,j,i-1) + e3x2_(m,ks,j,i) + e3x1_(m,ks,j-1,i) + e3x1_(m,ks,j,i));
@@ -337,77 +351,116 @@ TaskStatus MHD::CornerE(Driver *pdriver, int stage) {
     //       e3[is:ie+1,js:je+1,ks:ke  ]
     par_for("emf3", DevExeSpace(), 0, nmb1, ks, ke+1, js, je+1, is, ie+1,
     KOKKOS_LAMBDA(const int m, const int k, const int j, const int i) {
+      // upwind on the sign of the mass flux; average when it vanishes so that the
+      // selection is symmetric under reflection (Gardiner & Stone 2005)
+
       // integrate E1 to corner using SG07
       Real e1_l3, e1_r3, e1_l2, e1_r2;
-      if (flx2(m,IDN,k-1,j,i) >= 0.0) {
+      if (flx2(m,IDN,k-1,j,i) > 0.0) {
         e1_l3 = e1x3_(m,k,j-1,i) - e1cc_(m,k-1,j-1,i);
-      } else {
+      } else if (flx2(m,IDN,k-1,j,i) < 0.0) {
         e1_l3 = e1x3_(m,k,j  ,i) - e1cc_(m,k-1,j  ,i);
+      } else {
+        e1_l3 = 0.5*((e1x3_(m,k,j-1,i) - e1cc_(m,k-1,j-1,i)) +
+                     (e1x3_(m,k,j  ,i) - e1cc_(m,k-1,j  ,i)));
       }
-      if (flx2(m,IDN,k,j,i) >= 0.0) {
+      if (flx2(m,IDN,k,j,i) > 0.0) {
         e1_r3 = e1x3_(m,k,j-1,i) - e1cc_(m,k  ,j-1,i);
-      } else {
+      } else if (flx2(m,IDN,k,j,i) < 0.0) {
         e1_r3 = e1x3_(m,k,j  ,i) - e1cc_(m,k  ,j  ,i);
+      } else {
+        e1_r3 = 0.5*((e1x3_(m,k,j-1,i) - e1cc_(m,k  ,j-1,i)) +
+                     (e1x3_(m,k,j  ,i) - e1cc_(m,k  ,j  ,i)));
       }
-      if (flx3(m,IDN,k,j-1,i) >= 0.0) {
+      if (flx3(m,IDN,k,j-1,i) > 0.0) {
         e1_l2 = e1x2_(m,k-1,j,i) - e1cc_(m,k-1,j-1,i);
-      } else {
+      } else if (flx3(m,IDN,k,j-1,i) < 0.0) {
         e1_l2 = e1x2_(m,k  ,j,i) - e1cc_(m,k  ,j-1,i);
-      }
-      if (flx3(m,IDN,k,j,i) >= 0.0) {
-        e1_r2 = e1x2_(m,k-1,j,i) - e1cc_(m,k-1,j  ,i);
       } else {
+        e1_l2 = 0.5*((e1x2_(m,k-1,j,i) - e1cc_(m,k-1,j-1,i)) +
+                     (e1x2_(m,k  ,j,i) - e1cc_(m,k  ,j-1,i)));
+      }
+      if (flx3(m,IDN,k,j,i) > 0.0) {
+        e1_r2 = e1x2_(m,k-1,j,i) - e1cc_(m,k-1,j  ,i);
+      } else if (flx3(m,IDN,k,j,i) < 0.0) {
         e1_r2 = e1x2_(m,k  ,j,i) - e1cc_(m,k  ,j  ,i);
+      } else {
+        e1_r2 = 0.5*((e1x2_(m,k-1,j,i) - e1cc_(m,k-1,j  ,i)) +
+                     (e1x2_(m,k  ,j,i) - e1cc_(m,k  ,j  ,i)));
       }
       e1(m,k,j,i) = 0.25*(e1_l3 + e1_r3 + e1_l2 + e1_r2 +
                 e1x2_(m,k-1,j,i) + e1x2_(m,k,j,i) + e1x3_(m,k,j-1,i) + e1x3_(m,k,j,i));
 
       // integrate E2 to corner using SG07
       Real e2_l3, e2_r3, e2_l1, e2_r1;
-      if (flx1(m,IDN,k-1,j,i) >= 0.0) {
+      if (flx1(m,IDN,k-1,j,i) > 0.0) {
         e2_l3 = e2x3_(m,k,j,i-1) - e2cc_(m,k-1,j,i-1);
-      } else {
+      } else if (flx1(m,IDN,k-1,j,i) < 0.0) {
         e2_l3 = e2x3_(m,k,j,i  ) - e2cc_(m,k-1,j,i  );
+      } else {
+        e2_l3 = 0.5*((e2x3_(m,k,j,i-1) - e2cc_(m,k-1,j,i-1)) +
+                     (e2x3_(m,k,j,i  ) - e2cc_(m,k-1,j,i  )));
       }
-      if (flx1(m,IDN,k,j,i) >= 0.0) {
+      if (flx1(m,IDN,k,j,i) > 0.0) {
         e2_r3 = e2x3_(m,k,j,i-1) - e2cc_(m,k  ,j,i-1);
-      } else {
+      } else if (flx1(m,IDN,k,j,i) < 0.0) {
         e2_r3 = e2x3_(m,k,j,i  ) - e2cc_(m,k  ,j,i  );
+      } else {
+        e2_r3 = 0.5*((e2x3_(m,k,j,i-1) - e2cc_(m,k  ,j,i-1)) +
+                     (e2x3_(m,k,j,i  ) - e2cc_(m,k  ,j,i  )));
       }
-      if (flx3(m,IDN,k,j,i-1) >= 0.0) {
+      if (flx3(m,IDN,k,j,i-1) > 0.0) {
         e2_l1 = e2x1_(m,k-1,j,i) - e2cc_(m,k-1,j,i-1);
-      } else {
+      } else if (flx3(m,IDN,k,j,i-1) < 0.0) {
         e2_l1 = e2x1_(m,k  ,j,i) - e2cc_(m,k  ,j,i-1);
-      }
-      if (flx3(m,IDN,k,j,i) >= 0.0) {
-        e2_r1 = e2x1_(m,k-1,j,i) - e2cc_(m,k-1,j,i  );
       } else {
+        e2_l1 = 0.5*((e2x1_(m,k-1,j,i) - e2cc_(m,k-1,j,i-1)) +
+                     (e2x1_(m,k  ,j,i) - e2cc_(m,k  ,j,i-1)));
+      }
+      if (flx3(m,IDN,k,j,i) > 0.0) {
+        e2_r1 = e2x1_(m,k-1,j,i) - e2cc_(m,k-1,j,i  );
+      } else if (flx3(m,IDN,k,j,i) < 0.0) {
         e2_r1 = e2x1_(m,k  ,j,i) - e2cc_(m,k  ,j,i  );
+      } else {
+        e2_r1 = 0.5*((e2x1_(m,k-1,j,i) - e2cc_(m,k-1,j,i  )) +
+                     (e2x1_(m,k  ,j,i) - e2cc_(m,k  ,j,i  )));
       }
       e2(m,k,j,i) = 0.25*(e2_l3 + e2_r3 + e2_l1 + e2_r1 +
                 e2x3_(m,k,j,i-1) + e2x3_(m,k,j,i) + e2x1_(m,k-1,j,i) + e2x1_(m,k,j,i));
 
       // integrate E3 to corner using SG07
       Real e3_l2, e3_r2, e3_l1, e3_r1;
-      if (flx1(m,IDN,k,j-1,i) >= 0.0) {
+      if (flx1(m,IDN,k,j-1,i) > 0.0) {
         e3_l2 = e3x2_(m,k,j,i-1) - e3cc_(m,k,j-1,i-1);
-      } else {
+      } else if (flx1(m,IDN,k,j-1,i) < 0.0) {
         e3_l2 = e3x2_(m,k,j,i  ) - e3cc_(m,k,j-1,i  );
+      } else {
+        e3_l2 = 0.5*((e3x2_(m,k,j,i-1) - e3cc_(m,k,j-1,i-1)) +
+                     (e3x2_(m,k,j,i  ) - e3cc_(m,k,j-1,i  )));
       }
-      if (flx1(m,IDN,k,j,i) >= 0.0) {
+      if (flx1(m,IDN,k,j,i) > 0.0) {
         e3_r2 = e3x2_(m,k,j,i-1) - e3cc_(m,k,j  ,i-1);
-      } else {
+      } else if (flx1(m,IDN,k,j,i) < 0.0) {
         e3_r2 = e3x2_(m,k,j,i  ) - e3cc_(m,k,j  ,i  );
+      } else {
+        e3_r2 = 0.5*((e3x2_(m,k,j,i-1) - e3cc_(m,k,j  ,i-1)) +
+                     (e3x2_(m,k,j,i  ) - e3cc_(m,k,j  ,i  )));
       }
-      if (flx2(m,IDN,k,j,i-1) >= 0.0) {
+      if (flx2(m,IDN,k,j,i-1) > 0.0) {
         e3_l1 = e3x1_(m,k,j-1,i) - e3cc_(m,k,j-1,i-1);
-      } else {
+      } else if (flx2(m,IDN,k,j,i-1) < 0.0) {
         e3_l1 = e3x1_(m,k,j  ,i) - e3cc_(m,k,j  ,i-1);
-      }
-      if (flx2(m,IDN,k,j,i) >= 0.0) {
-        e3_r1 = e3x1_(m,k,j-1,i) - e3cc_(m,k,j-1,i  );
       } else {
+        e3_l1 = 0.5*((e3x1_(m,k,j-1,i) - e3cc_(m,k,j-1,i-1)) +
+                     (e3x1_(m,k,j  ,i) - e3cc_(m,k,j  ,i-1)));
+      }
+      if (flx2(m,IDN,k,j,i) > 0.0) {
+        e3_r1 = e3x1_(m,k,j-1,i) - e3cc_(m,k,j-1,i  );
+      } else if (flx2(m,IDN,k,j,i) < 0.0) {
         e3_r1 = e3x1_(m,k,j  ,i) - e3cc_(m,k,j  ,i  );
+      } else {
+        e3_r1 = 0.5*((e3x1_(m,k,j-1,i) - e3cc_(m,k,j-1,i  )) +
+                     (e3x1_(m,k,j  ,i) - e3cc_(m,k,j  ,i  )));
       }
       e3(m,k,j,i) = 0.25*(e3_l1 + e3_r1 + e3_l2 + e3_r2 +
                 e3x2_(m,k,j,i-1) + e3x2_(m,k,j,i) + e3x1_(m,k,j-1,i) + e3x1_(m,k,j,i));
