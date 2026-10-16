@@ -1,0 +1,69 @@
+# AthenaXXX input file for 2D MHD rotor test
+
+<comment>
+problem   = relativistic MHD rotor (sharp edge, uniform Bx)
+reference = Del Zanna,L., Bucciantini,N. & Londrillo,P., A&A, 400, 397 (2003)
+configure = cmake with PROBLEM set to fluids/rotor
+
+<job>
+basename   = Rotor     # problem ID: basename of output filenames
+
+<coord>
+special_rel = true    # special relativistic dynamics
+
+<mesh>
+nghost    = 2         # Number of ghost cells
+nx1       = 400       # Number of zones in X1-direction
+x1min     = -0.5      # minimum value of X1
+x1max     = 0.5       # maximum value of X1
+ix1_bc    = outflow   # inner-X1 boundary flag
+ox1_bc    = outflow   # outer-X1 boundary flag
+
+nx2       = 400       # Number of zones in X2-direction
+x2min     = -0.5      # minimum value of X2
+x2max     = 0.5       # maximum value of X2
+ix2_bc    = outflow   # inner-X2 boundary flag
+ox2_bc    = outflow   # outer-X2 boundary flag
+
+nx3       = 1         # Number of zones in X3-direction
+x3min     = -0.5      # minimum value of X3
+x3max     = 0.5       # maximum value of X3
+ix3_bc    = periodic  # inner-X3 boundary flag
+ox3_bc    = periodic  # outer-X3 boundary flag
+
+<meshblock>
+nx1       = 100       # Number of cells in each MeshBlock, X1-dir
+nx2       = 100       # Number of cells in each MeshBlock, X2-dir
+nx3       = 1         # Number of cells in each MeshBlock, X3-dir
+
+<time>
+evolution  = dynamic   # dynamic/kinematic/static
+integrator = rk2       # time integration algorithm
+cfl_number = 0.4       # The Courant, Friedrichs, & Lewy (CFL) Number
+nlim       = -1        # cycle limit
+tlim       = 0.4       # time limit
+ndiag      = 1         # cycles between diagostic output
+
+<mhd>
+eos         = ideal    # EOS type
+reconstruct = plm      # spatial reconstruction method
+rsolver     = hlle     # Riemann-solver to be used (SR: llf or hlle)
+gamma       = 1.333333333333333  # ratio of specific heats C_p/C_v
+
+<problem>
+d_amb       = 1.0      # ambient density
+p_amb       = 1.0      # pressure (uniform)
+d_rot       = 10.0     # rotor density (r .le. r0)
+omega       = 9.95     # rotor angular velocity: v_rot is (-omega*y, omega*x, 0), edge speed 0.995
+r0          = 0.1      # rotor radius
+bx          = 1.0      # uniform B1
+
+<output1>
+file_type   = hst      # History data dump
+data_format = %12.5e   # optional data format string
+dt          = 0.01     # time increment between outputs
+
+<output2>
+file_type  = bin       # binary data dump
+variable   = mhd_w_bcc # variables to be output
+dt         = 0.01      # time increment between outputs
