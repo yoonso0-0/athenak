@@ -9,6 +9,7 @@
 //  \brief provides classes to handle ALL types of data output
 
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "Kokkos_ScatterView.hpp"
@@ -189,7 +190,9 @@ struct HistoryData {
   Real hdata[NHISTORY_VARIABLES];
   bool header_written;
   int symmetry_factor = 1;  // Reflected copies represented; standard histories use 1
-  int user_index;         // UserDefined only: position of this file among the user files
+  // Extra "# name=value" header lines (e.g. radii) written after symmetry_factor
+  std::vector<std::pair<std::string, Real>> header_params;
+  int user_index;        // UserDefined only: position of this file among the user files
   std::string user_tag;   // UserDefined only: file name suffix, ".user.<tag>.hst" if set
   // constructor
   explicit HistoryData(PhysicsModule name, int index=0, const std::string &tag="") :

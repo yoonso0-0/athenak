@@ -106,8 +106,9 @@ def hst(filename, raw=False):
         # Parse header
         data_file.seek(header_location)
         header = data_file.readline()
-        # New histories record symmetry metadata before the column labels.
-        if header.startswith('# symmetry_factor='):
+        # New histories record metadata ("# name=value" lines such as
+        # symmetry_factor, radius, rin, rout) before the column labels.
+        while header.startswith('#') and '[1]=' not in header:
             header = data_file.readline()
         data_names = re.findall(r'\[\d+\]=(\S+)', header)
         if len(data_names) == 0:

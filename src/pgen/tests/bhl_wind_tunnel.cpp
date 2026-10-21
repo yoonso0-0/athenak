@@ -442,11 +442,17 @@ void BHLUserHistory(HistoryData *pdata, Mesh *pm) {
   // Volume sums are multiplied by this factor. Fluxes instead reconstruct the
   // full sphere by sampling mirror images; they need no further multiplier.
   pdata->symmetry_factor = HistorySymmetryFactor();
+  pdata->header_params.clear();
   const int nvol_files = volume_radii.size();
   if (pdata->user_index < nflux_files) {
+    pdata->header_params.emplace_back(
+        "radius", pm->pgen->spherical_grids[pdata->user_index]->radius);
     SphericalFluxHistory(pdata, pm);
   } else if (pdata->user_index < nflux_files + nvol_files) {
-    VolumeHistory(pdata, pm, volume_radii[pdata->user_index - nflux_files]);
+    const Real rout = volume_radii[pdata->user_index - nflux_files];
+    pdata->header_params.emplace_back("rin", pm->pmb_pack->phydro->sphere_mask_radius);
+    pdata->header_params.emplace_back("rout", rout);
+    VolumeHistory(pdata, pm, rout);
   } else {
     DomainHistory(pdata, pm);
   }

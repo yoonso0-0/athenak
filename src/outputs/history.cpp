@@ -437,12 +437,17 @@ void HistoryOutput::WriteOutputFile(Mesh *pm, ParameterInput *pin) {
         exit(EXIT_FAILURE);
       }
 
-      // Header lines: format marker, represented symmetry factor, column labels.
+      // Header lines: format marker, represented symmetry factor, any problem-specific
+  // parameters (header_params), column labels.
       // Each output instance appends its header once, including after restart.
       if (!(data.header_written)) {
         int iout = 1;
         std::fprintf(pfile,"# Athena++ history data\n");
         std::fprintf(pfile,"# symmetry_factor=%d\n", data.symmetry_factor);
+        for (const auto &param : data.header_params) {
+          std::fprintf(pfile,"# %s=%.10g\n", param.first.c_str(),
+                       static_cast<double>(param.second));
+        }
         std::fprintf(pfile,"#  [%d]=time      ", iout++);
         std::fprintf(pfile,"[%d]=dt       ", iout++);
         for (int n=0; n<data.nhist; ++n) {
