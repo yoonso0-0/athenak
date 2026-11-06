@@ -1,0 +1,110 @@
+# AthenaK input file: 3D BHL wind tunnel with a mass-loaded supersonic mask wind
+#
+# Same mesh and upstream state as bhl_wind_tunnel_3d-outflow.athinput. The mask injects
+# a supersonic spherical wind whose mass-loss rate is set by mask_dens_over_dens_inf.
+#
+# Scales (GM=1, dens_inf=1, cs_inf=0.5, vel_inf=1, r_mask=1):
+#   accretion radius  R_B      = 2GM/(v^2 + cs^2)                = 1.6
+#   Bondi-Hoyle rate  Mdot_BHL = 4 pi (GM)^2 rho/(v^2+cs^2)^1.5  = 8.992
+#
+# Mask wind, with D = mask_dens_over_dens_inf and V = mask_vel_r_over_vel_inf:
+#   mass-loss rate    Mdot_w = 4 pi r_mask^2 dens_inf vel_inf D V = 12 pi = 37.70
+#                            = 4.19 Mdot_BHL
+#   For a target Mdot_w = lambda Mdot_BHL at fixed V:
+#     D = lambda (R_B/r_mask)^2 sqrt(1 + 1/mach_inf^2) / (4 V)
+#
+# The mask injects the prescribed Mdot_w only when the wind leaves it unobstructed:
+#  - supersonic at the mask (mach_spherical_wind > 1; 3 here), or it chokes at the
+#    surface and injects a different rate;
+#  - vel_r above the escape speed sqrt(2GM/r_mask) = 1.41 (3 here);
+#  - wind ram pressure dens vel_r^2 (= D V^2 = 9 here) well above that of the incoming
+#    gas at r_mask, at least dens_inf (vel_inf^2 + 2GM/r_mask) = 3 here and more along
+#    the focused downstream axis. Otherwise the inflow pushes onto the mask and the
+#    fixed mask state behaves as a reservoir: with D = 0.5, V = 2 (ram 2) the wind
+#    tracer flux at r = 1.2 fell from 8.0 at t = 1 to 2.6 at t = 6 against 12.57.
+# Check the injected rate with sflux in the flux0 history (r = 1.2 r_mask; a sphere
+# within a cell of the mask surface reads ~3% low, from the staircase mask).
+#
+# Mesh: one quadrant, x2 >= 0 and x3 >= 0, with reflecting symmetry planes at x2 = 0 and
+# x3 = 0; the user history integrals are those of the full domain.
+
+<comment>
+problem   = 3D BHL wind tunnel: Mach-2 flow past a GM=1 point mass with a mass-loaded wind
+
+<job>
+basename  = BHLWindTunnel3DMassLoaded
+
+<mesh>
+nghost    = 3          # Number of ghost cells (3 required by ppm4)
+nx1       = 160        # Number of zones in X1-direction (dx = 0.1)
+x1min     = -8.0       # minimum value of X1: 5 accretion radii upstream
+x1max     = 8.0        # maximum value of X1: 5 accretion radii downstream
+ix1_bc    = user       # upstream face: held at the uniform wind state
+ox1_bc    = outflow    # downstream face: the wake must be able to leave
+
+nx2       = 40         # Number of zones in X2-direction (dx = 0.1)
+x2min     = 0.0        # minimum value of X2
+x2max     = 4.0        # maximum value of X2
+ix2_bc    = reflect    # symmetry plane through the point mass
+ox2_bc    = outflow
+
+nx3       = 40         # Number of zones in X3-direction (dx = 0.1)
+x3min     = 0.0        # minimum value of X3
+x3max     = 4.0        # maximum value of X3
+ix3_bc    = reflect    # symmetry plane through the point mass
+ox3_bc    = outflow
+
+<meshblock>
+nx1       = 20
+nx2       = 20
+nx3       = 20
+
+<time>
+evolution  = dynamic    # dynamic/kinematic/static
+integrator = rk2        # time integration algorithm
+cfl_number = 0.3        # The Courant, Friedrichs, & Lewy (CFL) Number
+nlim       = -1         # cycle limit
+tlim       = 20.0       # time limit
+ndiag      = 100        # cycles between diagostic output
+
+<hydro>
+eos         = ideal     # EOS type
+reconstruct = ppm4      # spatial reconstruction method
+rsolver     = hllc      # Riemann-solver to be used
+gamma       = 1.666666666667 # gamma = C_p/C_v (no upper bound for this problem)
+nscalars    = 1         # passive scalar s: mass fraction of wind material from the mask
+
+<hydro_srcterms>
+point_particle_gravity_at_center = true   # GM=1 point mass at the coordinate origin
+gravity_softening_length         = 0.1    # no larger than the sphere_mask radius
+
+<problem>
+pgen_name = bhl_wind_tunnel
+user_hist = true        # flux<n>, vol<n>, and optional domain history files
+flux_radii = 1.2, 2.0    # mass, momentum and scalar fluxes through these spheres
+flux_nlev = 10           # 10*nlev^2+2 points (default 5)
+volume_radii = 2.0, 1000 # domain columns integrated over sphere_mask radius <= r < radius
+domain_hist = true      # mass, dM, scal-0, dPx, fgrav1, fgrav1_s, DF_ambient, DF_outflow
+dens_inf  = 1.0         # upstream density
+accretion_radius = 1.6  # R_B = 2GM/(vel_inf^2+cs_inf^2)
+mach_inf  = 2.0         # vel_inf/cs_inf: gives cs_inf = 0.5, vel_inf = 1
+# Mask wind: Mdot_w = 4 pi r_mask^2 dens_inf vel_inf * (dens ratio) * (vel_r ratio)
+mask_vel_r_over_vel_inf = 3.0  # V: outward vel_r = 3, above the escape speed 1.41
+mask_dens_over_dens_inf = 1.0  # D: mask density 1, so Mdot_w = 12 pi = 4.19 Mdot_BHL
+mach_spherical_wind = 3.0      # |vel_r|/cs of the mask wind: cs = 1 (eint = 0.9)
+
+<sphere_mask>
+enabled   = true
+radius    = 1.0              # mask radius, 0.625 of the accretion radius 1.6
+bc        = spherical_wind   # inner BC, not a mass sink; bc=reflecting gives a solid body
+scalar    = 1.0              # passive scalar s in the mask (s = 0 upstream)
+
+<output1>
+file_type   = hst       # history data dump
+data_format = %12.4e    # optional data format string (5 significant digits)
+dt          = 1.0       # time increment between outputs
+
+<output2>
+file_type  = bin        # AthenaK native binary dump
+variable   = hydro_w    # variables to be output
+dt         = 1.0        # time increment between outputs
