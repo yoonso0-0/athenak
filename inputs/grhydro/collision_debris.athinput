@@ -1,0 +1,96 @@
+# AthenaK input file for hydrodynamic collision debris accreting onto a Kerr SMBH
+# Compile with -D PROBLEM=hydro/collision_debris.
+#
+# Code units are G = c = M_BH = 1: lengths in r_g = GM_BH/c^2, times in
+# t_g = GM_BH/c^3. Mesh sizes, <time>/tlim, output dt, flux_radii, and x_coll
+# are in these units. The collision parameters in <problem> are given in
+# physical units (noted per line) and converted using smbh_mass.
+
+<comment>
+problem   = Collision debris accretion onto a Kerr black hole
+
+<job>
+basename  = debris
+
+<mesh>
+nghost = 4        # Number of ghost cells
+nx1    = 128      # number of cells in x1-direction
+x1min  = -64.0    # minimum x1 [r_g]
+x1max  = 64.0     # maximum x1 [r_g]
+ix1_bc = user     # no-inflow outflow boundary
+ox1_bc = user
+
+nx2    = 128      # number of cells in x2-direction
+x2min  = -64.0    # minimum x2 [r_g]
+x2max  = 64.0     # maximum x2 [r_g]
+ix2_bc = user
+ox2_bc = user
+
+nx3    = 128      # number of cells in x3-direction
+x3min  = -64.0    # minimum x3 [r_g]; set 0.0 with ix3_bc = reflect for the
+x3max  = 64.0     # maximum x3 [r_g]   upper half-domain (equatorial fold)
+ix3_bc = user
+ox3_bc = user
+
+<meshblock>
+nx1  = 32         # Number of cells in each MeshBlock, X1-dir
+nx2  = 32         # Number of cells in each MeshBlock, X2-dir
+nx3  = 32         # Number of cells in each MeshBlock, X3-dir
+
+<time>
+evolution  = dynamic     # dynamic/kinematic/static
+integrator = rk2         # time integration algorithm
+cfl_number = 0.3         # The Courant, Friedrichs, & Lewy (CFL) Number
+nlim       = -1          # cycle limit
+tlim       = 1000.0      # time limit [t_g]
+ndiag      = 200         # cycles between diagnostic output
+
+<coord>
+general_rel = true       # general relativity
+a           = 0.9        # black hole spin a/M (|a| <= 1)
+excise      = true       # excise r_KS <= 1 (rexcise is fixed at 1.0 without radiation)
+dexcise     = 1.0e-8     # density inside excision (initial and every step)
+pexcise     = 0.333e-10  # pressure inside excision (initial and every step)
+
+<hydro>
+eos         = ideal      # EOS type
+reconstruct = ppm4       # spatial reconstruction method
+rsolver     = hlle       # Riemann-solver to be used
+dfloor      = 1.0e-10    # floor on density rho; also the initial background outside excision
+pfloor      = 1.0e-18   # floor on gas pressure p_gas; also the initial background outside excision
+gamma       = 1.3333333333333333  # ratio of specific heats Gamma
+fofc        = true       # Enable first order flux correction
+gamma_max   = 20.0       # Enable ceiling on Lorentz factor
+
+<problem>
+# Collision parameters (all required)
+smbh_mass     = 1.0e6             # SMBH mass [M_sun]; sets r_g and t_g
+t_minus_tcoll = 1.0               # time since the collision at t=0 [days]; must be > 0
+x_coll        = 30.0, 0.0, 0.0    # collision site, Cartesian KS x, y, z [r_g = GM_BH/c^2]
+v_coll        = 0.0, 1.0e4, 0.0   # center-of-mass velocity of the collision, added everywhere; Cartesian KS x, y, z [km/s]
+vr_peak       = 5.0e3             # peak debris radial velocity [km/s]; v^r = vr_peak*r/r_peak
+#   from x_coll for r < r_peak = vr_peak*t_minus_tcoll
+#   density: uniform 0.18*M_total/(4pi/3 r_break^3) for r < r_break = 0.1*r_peak,
+#   times (r/r_break)^-8 outside (floored at dfloor)
+#   temperature: flat T = 42500 K (t_minus_tcoll/day)^-0.7;
+#   p = rho k_B T/(mu m_u) (floored at pfloor)
+M_total       = 1.0               # total debris mass [M_sun]
+density_scale = 1.0e-6           # physical density of code rho = 1 [g/cm^3]
+mu            = 0.6               # mean molecular weight (default 0.6); p = rho k_B T / (mu m_u)
+
+# Spherical flux diagnostics -> <basename>.user.flux<n>.hst
+user_hist   = true          # enroll mdot/edot/ldot through flux_radii
+flux_radii  = 12, 24        # extra comma-separated KS radii [r_g] (default: 12, 24);
+                            # the outer horizon 1+sqrt(1-a^2) is always added as flux0
+flux_nlev   = 5             # angular resolution: 10*nlev^2+2 points
+flux_ninterp = -1           # interpolation points per axis; -1 = 2*nghost
+
+<output1>
+file_type  = hst        # History output
+dt         = 10.0       # time increment between outputs [t_g]
+user_hist_only = true   # only output user-defined history
+
+<output2>
+file_type  = bin        # Binary data dump
+variable   = hydro_w    # variables to be output
+dt         = 100.0      # time increment between outputs [t_g]
