@@ -1,0 +1,706 @@
+//========================================================================================
+// AthenaXXX astrophysical plasma code
+// Copyright(C) 2020 James M. Stone <jmstone@ias.edu> and the Athena code team
+// Licensed under the 3-clause BSD License (the "LICENSE")
+//========================================================================================
+//! \file collision_debris.cpp
+//! \brief Accretion of stellar-collision debris onto a Kerr black hole: GR
+//! hydro in Cartesian Kerr-Schild coordinates. Adapted from
+//! fluids/gr_torus.cpp.
+//! Units: G = c = M_BH = 1 (lengths in r_g, times in t_g).
+//!
+//! Initial data, t_minus_tcoll after a collision at x_coll. With
+//! r = |x - x_coll|, vr_peak = 5.5 v_rel, r_peak = vr_peak * t_minus_tcoll,
+//! r_break_rho = 0.1 r_peak, r_break_T = 1.5 r_break_rho:
+//!   - density:     uniform rho_core for r < r_break_rho, r^-8 tail outside
+//!   - velocity:    v_coll, plus homologous expansion for r < r_peak
+//!   - temperature: T_in inside r_break_T, T_out (r/r_break_T)^-1.5 outside,
+//!                  no lower than 1e3 K (see DebrisTemperature)
+//!   - background:  at rest on the <hydro> floors wherever the debris
+//!                  profile is at or below dfloor (r >= r_dfloor)
+//!
+//! Flux diagnostics (<problem>/user_hist = true):
+//!   - one history file <basename>.user.flux<n>.hst per surface: flux0 on the
+//!     outer horizon, then flux1, flux2, ... at each flux_radii entry
+//!     (comma-separated, default "12, 24")
+//!   - flux_nlev:    angular sampling, 10*nlev^2+2 points (default 5)
+//!   - flux_ninterp: interpolation points per axis (default -1 = 2*nghost)
+//!   - each header records radius, nangles, and flux_ninterp
+//!
+//! Equatorial symmetry: with a reflecting boundary at z = 0 the mesh may cover
+//! only the upper or the lower half. The flux surfaces then still integrate
+//! the full sphere, and the headers record symmetry_factor=2.
+
+#include <algorithm>
+#include <cmath>
+#include <cstdlib>
+#include <iomanip>
+#include <iostream>
+#include <memory>
+#include <sstream>
+#include <string>
+#include <vector>
+
+#include "athena.hpp"
+#include "coordinates/cartesian_ks.hpp"
+#include "coordinates/cell_locations.hpp"
+#include "coordinates/coordinates.hpp"
+#include "eos/eos.hpp"
+#include "geodesic-grid/spherical_grid.hpp"
+#include "globals.hpp"
+#include "hydro/hydro.hpp"
+#include "mesh/mesh.hpp"
+#include "outputs/outputs.hpp"
+#include "parameter_input.hpp"
+#include "pgen/pgen.hpp"
+#include "units/units.hpp"
+
+namespace {
+void NoInflowBoundary(Mesh *pm);
+void AccretionFluxes(HistoryData *pdata, Mesh *pm);
+
+// Equatorial fold of the flux surfaces: +1 (-1) maps every point onto the
+// upper (lower) half-domain by reflection through z = 0; 0 means no fold.
+// The equatorial plane is the only reflection symmetry of a spinning Kerr
+// metric.
+int equatorial_fold = 0;
+
+[[noreturn]] void Fatal(const std::string &message) {
+  std::cerr << "### FATAL ERROR in " << __FILE__ << std::endl
+            << message << std::endl;
+  std::exit(EXIT_FAILURE);
+}
+
+// Parse a comma-separated list of reals (same convention as bhl_wind_tunnel).
+std::vector<Real> ParseRealList(const std::string &name, std::string list) {
+  std::replace(list.begin(), list.end(), ',', ' ');
+  std::istringstream stream(list);
+  std::vector<Real> values;
+  while (true) {
+    stream >> std::ws;
+    if (stream.eof())
+      break;
+    Real value;
+    if (!(stream >> value)) {
+      Fatal("<problem>/" + name +
+            " must be a comma-separated list of numbers.");
+    }
+    values.push_back(value);
+  }
+  if (values.empty()) {
+    Fatal("<problem>/" + name + " must be a comma-separated list of numbers.");
+  }
+  return values;
+}
+
+// Flux surface radii: the outer horizon first (flux0), then the flux_radii
+// entries in order.
+std::vector<Real> ParseFluxRadii(ParameterInput *pin, const Real r_horizon) {
+  std::vector<Real> radii{r_horizon};
+  const auto extra = ParseRealList(
+      "flux_radii", pin->GetOrAddString("problem", "flux_radii", "12, 24"));
+  radii.insert(radii.end(), extra.begin(), extra.end());
+  return radii;
+}
+
+// Collision parameters in code units (G = c = M_BH = 1), except smbh_mass,
+// which stays in solar masses as the physical scale.
+struct DebrisParameters {
+  Real smbh_mass;     // M_BH [M_sun]
+  Real t_minus_tcoll; // time since the collision [t_g] (input in days)
+  Real t_days;        // time since the collision [days], as input
+  Real x_coll[3];     // collision site, Cartesian KS (x, y, z) [r_g]
+  Real v_coll[3];     // center-of-mass velocity [c] (input in km/s)
+  Real v_rel;         // relative velocity of the colliding stars [c]
+                      // (input in km/s)
+  Real vr_peak;       // peak homologous expansion speed, 5.5 v_rel [c]
+  Real density_scale; // physical density of code density 1 [g/cm^3]
+  Real m_total;       // debris mass parameter [density_scale r_g^3] (input
+                      // M_sun); the profile holds 4/3 m_total
+  Real b;             // collision parameter b; temperatures scale as b/0.1
+  Real mu;            // mean molecular weight
+  // Inputs as given, for the startup report.
+  Real v_coll_kms[3], v_rel_kms, m_total_msun;
+  // Code pressure per code density per kelvin, k_B / (mu m_u c^2), so that
+  // p_code = rho_code * T[K] * kelvin_to_code (density_scale cancels).
+  Real kelvin_to_code;
+};
+
+DebrisParameters ReadDebrisParameters(ParameterInput *pin) {
+  using units::Units;
+  DebrisParameters debris{};
+  debris.smbh_mass = pin->GetReal("problem", "smbh_mass");
+  const Real t_days = pin->GetReal("problem", "t_minus_tcoll");
+  const auto x_coll =
+      ParseRealList("x_coll", pin->GetString("problem", "x_coll"));
+  const auto v_kms =
+      ParseRealList("v_coll", pin->GetString("problem", "v_coll"));
+  if (!std::isfinite(debris.smbh_mass) || debris.smbh_mass <= 0.0 ||
+      !std::isfinite(t_days) || t_days <= 0.0) {
+    Fatal("<problem>/smbh_mass and t_minus_tcoll must be positive and "
+          "finite.");
+  }
+  debris.t_days = t_days;
+  if (x_coll.size() != 3) {
+    Fatal("<problem>/x_coll must have exactly three components (r_g).");
+  }
+  for (int d = 0; d < 3; ++d) {
+    if (!std::isfinite(x_coll[d]))
+      Fatal("<problem>/x_coll must be finite.");
+    debris.x_coll[d] = x_coll[d];
+  }
+  if (v_kms.size() != 3) {
+    Fatal("<problem>/v_coll must have exactly three components (km/s).");
+  }
+
+  constexpr Real seconds_per_day = 86400.0;
+  const Real c_kms = Units::speed_of_light_cgs / Units::km_s_cgs;
+  const Real t_g = Units::grav_constant_cgs * debris.smbh_mass *
+                   Units::msun_cgs / std::pow(Units::speed_of_light_cgs, 3);
+  debris.t_minus_tcoll = t_days * seconds_per_day / t_g;
+  Real v2 = 0.0;
+  for (int d = 0; d < 3; ++d) {
+    debris.v_coll_kms[d] = v_kms[d];
+    debris.v_coll[d] = v_kms[d] / c_kms;
+    v2 += SQR(debris.v_coll[d]);
+  }
+  if (!std::isfinite(v2) || v2 >= 1.0) {
+    Fatal("<problem>/v_coll must be finite and subluminal.");
+  }
+  debris.v_rel_kms = pin->GetReal("problem", "v_rel");
+  debris.v_rel = debris.v_rel_kms / c_kms;
+  debris.vr_peak = 5.5 * debris.v_rel;
+  if (!std::isfinite(debris.vr_peak) || debris.vr_peak <= 0.0 ||
+      debris.vr_peak >= 1.0) {
+    Fatal("<problem>/v_rel must be positive and finite, with "
+          "vr_peak = 5.5 v_rel subluminal (km/s).");
+  }
+  debris.density_scale = pin->GetReal("problem", "density_scale");
+  if (!std::isfinite(debris.density_scale) || debris.density_scale <= 0.0) {
+    Fatal("<problem>/density_scale must be positive and finite (g/cm^3).");
+  }
+  const Real m_total_msun = pin->GetReal("problem", "M_total");
+  debris.m_total_msun = m_total_msun;
+  const Real r_g = t_g * Units::speed_of_light_cgs; // cm
+  debris.m_total =
+      m_total_msun * Units::msun_cgs / (debris.density_scale * r_g * r_g * r_g);
+  if (!std::isfinite(debris.m_total) || debris.m_total <= 0.0) {
+    Fatal("<problem>/M_total must be positive and finite (M_sun).");
+  }
+  debris.b = pin->GetReal("problem", "b");
+  if (!std::isfinite(debris.b) || debris.b <= 0.0) {
+    Fatal("<problem>/b must be positive and finite.");
+  }
+  debris.mu = pin->GetOrAddReal("problem", "mu", 0.6);
+  if (!std::isfinite(debris.mu) || debris.mu <= 0.0) {
+    Fatal("<problem>/mu must be positive and finite.");
+  }
+  debris.kelvin_to_code =
+      Units::k_boltzmann_cgs / (debris.mu * Units::atomic_mass_unit_cgs *
+                                SQR(Units::speed_of_light_cgs));
+  return debris;
+}
+
+// Debris temperature [K] at distance r from the collision site:
+//   T = max(1e3 K, T0 (r / r_break_T)^delta)
+//     r <  r_break_T:  T0 = t_in,   delta = 0
+//     r >= r_break_T:  T0 = t_out,  delta = -1.5
+// t_in and t_out are set in UserProblem.
+KOKKOS_INLINE_FUNCTION
+Real DebrisTemperature(const Real r, const Real r_break_T, const Real t_in,
+                       const Real t_out) {
+  Real temp_k = t_in;
+  if (r >= r_break_T) {
+    const Real s = r_break_T / r;
+    temp_k = t_out * s * sqrt(s);
+  }
+  return fmax(1.0e3, temp_k);
+}
+
+} // namespace
+
+//----------------------------------------------------------------------------------------
+//! \fn ProblemGenerator::UserProblem()
+//! \brief Enroll the boundary and flux diagnostics, print the startup report,
+//! and set the debris initial data. Compile with
+//! -D PROBLEM=hydro/collision_debris.
+
+void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
+  MeshBlockPack *pmbp = pmy_mesh_->pmb_pack;
+  if (pmbp->phydro == nullptr || pmbp->pmhd != nullptr ||
+      pmbp->prad != nullptr) {
+    std::cerr
+        << "### FATAL ERROR in " << __FILE__ << std::endl
+        << "collision_debris requires hydrodynamics without MHD or radiation."
+        << std::endl;
+    std::exit(EXIT_FAILURE);
+  }
+  if (!pmbp->pcoord->is_general_relativistic) {
+    std::cerr << "### FATAL ERROR in " << __FILE__ << std::endl
+              << "collision_debris requires general_rel = true in <coord> "
+              << "and a fixed spacetime." << std::endl;
+    std::exit(EXIT_FAILURE);
+  }
+  const auto coord = pmbp->pcoord->coord_data;
+  if (coord.is_minkowski || !std::isfinite(coord.bh_spin) ||
+      std::abs(coord.bh_spin) > 1.0) {
+    std::cerr << "### FATAL ERROR in " << __FILE__ << std::endl
+              << "collision_debris requires a Kerr metric with |a| <= 1."
+              << std::endl;
+    std::exit(EXIT_FAILURE);
+  }
+  auto *phydro = pmbp->phydro;
+  const auto eos = phydro->peos->eos_data;
+  if (!eos.is_ideal || !std::isfinite(eos.gamma) || eos.gamma <= 1.0) {
+    std::cerr << "### FATAL ERROR in " << __FILE__ << std::endl
+              << "collision_debris requires an ideal gas with gamma > 1."
+              << std::endl;
+    std::exit(EXIT_FAILURE);
+  }
+
+  // Callbacks and flux surfaces are set up on restarts too.
+  user_bcs_func = NoInflowBoundary;
+  user_hist_func = AccretionFluxes;
+  if (user_hist) {
+    if (!pmy_mesh_->three_d) {
+      Fatal("<problem>/user_hist requires a 3D mesh for spherical flux "
+            "integrals.");
+    }
+    const int nlev = pin->GetOrAddInteger("problem", "flux_nlev", 5);
+    if (nlev < 1)
+      Fatal("<problem>/flux_nlev must be at least 1.");
+    const int ninterp = pin->GetOrAddInteger("problem", "flux_ninterp", -1);
+    if ((ninterp < 1 && ninterp != -1) ||
+        ninterp > 2 * pmy_mesh_->mb_indcs.ng + 1) {
+      Fatal("<problem>/flux_ninterp must be -1 (2*nghost) or lie between "
+            "1 and 2*nghost+1.");
+    }
+    const Real r_horizon = 1.0 + std::sqrt(1.0 - SQR(coord.bh_spin));
+    const auto radii = ParseFluxRadii(pin, r_horizon);
+    const auto &size = pmy_mesh_->mesh_size;
+    const bool reflect_lower =
+        size.x3min == 0.0 &&
+        pmy_mesh_->mesh_bcs[BoundaryFace::inner_x3] == BoundaryFlag::reflect;
+    const bool reflect_upper =
+        size.x3max == 0.0 &&
+        pmy_mesh_->mesh_bcs[BoundaryFace::outer_x3] == BoundaryFlag::reflect;
+    equatorial_fold = reflect_lower ? 1 : (reflect_upper ? -1 : 0);
+    for (std::size_t n = 0; n < radii.size(); ++n) {
+      const Real radius = radii[n];
+      // A constant-r Kerr-Schild surface reaches sqrt(r^2 + a^2) in x and y.
+      const Real equatorial_radius = std::hypot(radius, coord.bh_spin);
+      if (!std::isfinite(radius) || radius <= 0.0 ||
+          equatorial_radius >=
+              std::min({-size.x1min, size.x1max, -size.x2min, size.x2max}) ||
+          (!reflect_lower && radius >= -size.x3min) ||
+          (!reflect_upper && radius >= size.x3max)) {
+        Fatal("Each <problem>/flux_radii entry must be finite, positive, and "
+              "its Kerr-Schild surface must fit inside the mesh, allowing "
+              "reflection through an equatorial boundary at z=0.");
+      }
+      spherical_grids.push_back(
+          std::make_unique<SphericalGrid>(pmbp, nlev, radius, ninterp));
+      if (equatorial_fold != 0) {
+        const int fold[3] = {0, 0, equatorial_fold};
+        spherical_grids.back()->FoldInterpolationCoordinates(fold);
+      }
+      user_hist_tags.push_back("flux" + std::to_string(n));
+    }
+  }
+  if (restart)
+    return;
+
+  const DebrisParameters debris = ReadDebrisParameters(pin);
+  // Debris scales [code units].
+  //   vr_peak     = 5.5 v_rel                peak expansion speed
+  //   r_peak      = vr_peak * t_minus_tcoll  edge of the homologous flow
+  //   r_break_rho = 0.1 r_peak               edge of the uniform core
+  //   r_break_T   = 1.5 r_break_rho          break of the temperature profile
+  //   rho_core    = 5 M_total / (8 pi r_break_rho^3)
+  //                 (core + r^-8 tail integrate to 4/3 M_total)
+  //   T_in        = 20000 K (b/0.1) (t_minus_tcoll / 1 day)^-0.3
+  //                 * (v_rel / 1e4 km/s)
+  //   T_out       = 65000 K (b/0.1) (t_minus_tcoll / 1 day)^-0.7
+  // Physical density is rho * density_scale.
+  const Real r_peak = debris.vr_peak * debris.t_minus_tcoll;
+  const Real r_break_rho = 0.1 * r_peak;
+  const Real r_break_T = 1.5 * r_break_rho;
+  const Real rho_core =
+      5.0 * debris.m_total / (8.0 * M_PI * r_break_rho * SQR(r_break_rho));
+  const Real b_factor = debris.b / 0.1;
+  const Real t_in = 20000.0 * b_factor * std::pow(debris.t_days, -0.3) *
+                    (debris.v_rel_kms / 1.0e4);
+  const Real t_out = 65000.0 * b_factor * std::pow(debris.t_days, -0.7);
+
+  // r_dfloor: distance from x_coll where the r^-8 tail falls to dfloor,
+  //   r_dfloor = r_break_rho * (rho_core / dfloor)^(1/8),
+  // or 0 if even the core is at or below dfloor. The run requires
+  // r_dfloor >= r_peak, so the whole homologous flow is above the floor.
+  const Real r_dfloor =
+      (rho_core > eos.dfloor)
+          ? r_break_rho * std::pow(rho_core / eos.dfloor, 0.125)
+          : 0.0;
+  const bool dfloor_inside_peak = r_dfloor < r_peak;
+  // r_coll: distance of the collision site from the black hole. If
+  // r_coll < r_dfloor, above-floor debris already covers the hole at t = 0.
+  const Real r_coll = std::sqrt(SQR(debris.x_coll[0]) + SQR(debris.x_coll[1]) +
+                                SQR(debris.x_coll[2]));
+  const bool bh_inside_dfloor = r_coll < r_dfloor;
+
+  // Startup report (rank 0):
+  //   - inputs and derived debris scales
+  //   - at r_dfloor, the debris temperature next to the temperature the
+  //     <hydro> floors imply, T_floor = (pfloor / dfloor) / kelvin_to_code
+  //   - a fatal error if r_dfloor < r_peak, else a warning if
+  //     r_coll < r_dfloor
+  if (global_variable::my_rank == 0) {
+    const Real t_floor = eos.pfloor / (eos.dfloor * debris.kelvin_to_code);
+    std::ostringstream msg;
+    msg << std::scientific << std::setprecision(4);
+    // One "label  value  unit" row with aligned columns.
+    auto row = [&msg](const std::string &label, const Real value,
+                      const std::string &unit) {
+      msg << "  " << std::left << std::setw(34) << label << std::right
+          << std::setw(12) << value;
+      if (!unit.empty())
+        msg << "  " << unit;
+      msg << std::endl;
+    };
+    auto vec_row = [&msg](const std::string &label, const Real v[3],
+                          const std::string &unit) {
+      msg << "  " << std::left << std::setw(34) << label << std::right
+          << std::setw(12) << v[0] << std::setw(12) << v[1] << std::setw(12)
+          << v[2] << "  " << unit << std::endl;
+    };
+    auto section = [&msg](const std::string &title) {
+      msg << std::endl << " " << title << std::endl;
+    };
+    const std::string rule(76, '-');
+    msg << std::endl
+        << rule << std::endl
+        << " collision_debris: initial debris setup" << std::endl
+        << rule << std::endl;
+    section("Input parameters <problem>:");
+    row("smbh_mass", debris.smbh_mass, "M_sun");
+    row("t_minus_tcoll", debris.t_days, "days");
+    vec_row("x_coll (x, y, z)", debris.x_coll, "r_g");
+    vec_row("v_coll (x, y, z)", debris.v_coll_kms, "km/s");
+    row("v_rel", debris.v_rel_kms, "km/s");
+    row("M_total", debris.m_total_msun, "M_sun");
+    row("density_scale", debris.density_scale, "g/cm^3");
+    row("b", debris.b, "");
+    row("mu", debris.mu, "");
+    section("Derived debris scales (code units):");
+    row("t_minus_tcoll", debris.t_minus_tcoll, "t_g");
+    row("vr_peak = 5.5 * v_rel", debris.vr_peak, "c");
+    row("r_peak = vr_peak * t_minus_tcoll", r_peak, "r_g");
+    row("r_break_rho = 0.1 * r_peak", r_break_rho, "r_g");
+    row("r_break_T = 1.5 * r_break_rho", r_break_T, "r_g");
+    row("rho_core", rho_core, "");
+    row("M_total", debris.m_total, "density_scale * r_g^3");
+    row("T_in (debris T, r < r_break_T)", t_in, "K");
+    row("T_out (debris T at r_break_T+)", t_out, "K");
+    section("<hydro> floors:");
+    row("dfloor", eos.dfloor, "");
+    row("pfloor", eos.pfloor, "");
+    if (rho_core > eos.dfloor) {
+      const Real t_debris = DebrisTemperature(r_dfloor, r_break_T, t_in, t_out);
+      section("Where the debris density falls to dfloor:");
+      row("distance from x_coll, r_dfloor", r_dfloor, "r_g");
+      row("  in units of r_break_rho", r_dfloor / r_break_rho, "");
+      row("  in units of r_peak", r_dfloor / r_peak, "");
+      row("|x_coll| / r_dfloor", r_coll / r_dfloor, "");
+      row("debris temperature T_debris", t_debris, "K");
+      row("floor temperature T_floor", t_floor, "K  (pfloor/dfloor)");
+      row("T_floor / T_debris", t_floor / t_debris, "");
+    } else {
+      section("rho_core <= dfloor: the debris lies entirely on the density "
+              "floor.");
+      row("floor temperature T_floor", t_floor, "K  (pfloor/dfloor)");
+    }
+    msg << std::fixed << std::setprecision(2)
+        << "  (T = p mu m_u / (rho k_B), mu = " << debris.mu << ")" << std::endl
+        << rule << std::endl
+        << std::endl;
+    std::cout << msg.str();
+    if (dfloor_inside_peak) {
+      std::cerr << std::scientific << std::setprecision(4)
+                << "### FATAL ERROR in " << __FILE__ << std::endl
+                << "The debris density reaches dfloor at r_dfloor = "
+                << r_dfloor << " r_g from x_coll, inside r_peak = " << r_peak
+                << " r_g." << std::endl
+                << "Lower <hydro>/dfloor or <problem>/density_scale so that "
+                << "r_dfloor >= r_peak." << std::endl;
+    } else if (bh_inside_dfloor) {
+      const std::string bar(76, '!');
+      std::cout << std::scientific << std::setprecision(4) << bar << std::endl
+                << "!!! WARNING: collision site is inside r_dfloor" << std::endl
+                << "!!!   |x_coll| = " << r_coll
+                << " r_g  <  r_dfloor = " << r_dfloor << " r_g" << std::endl
+                << "!!!   The above-floor debris profile already covers the "
+                << "black hole at t = 0," << std::endl
+                << "!!!   so the initial data includes gas at and inside the "
+                << "horizon." << std::endl
+                << bar << std::endl
+                << std::endl;
+    }
+  }
+  if (dfloor_inside_peak) {
+    // Let rank 0 finish printing before any rank exits; otherwise the MPI
+    // launcher can kill it first and the report and error are lost.
+    std::cout << std::flush;
+    std::cerr << std::flush;
+#if MPI_PARALLEL_ENABLED
+    MPI_Barrier(MPI_COMM_WORLD);
+#endif
+    std::exit(EXIT_FAILURE);
+  }
+
+  const auto indcs = pmy_mesh_->mb_indcs;
+  const int is = indcs.is, ie = indcs.ie;
+  const int js = indcs.js, je = indcs.je;
+  const int ks = indcs.ks, ke = indcs.ke;
+  const int nhydro = phydro->nhydro;
+  const int nvars = nhydro + phydro->nscalars;
+  const Real gm1 = eos.gamma - 1.0;
+  // Internal energy density floor, as in reconstruct/recon.hpp.
+  const Real efloor = eos.pfloor / gm1;
+  const auto &size = pmbp->pmb->mb_size;
+  const auto &excised = pmbp->pcoord->excision_floor;
+  auto &w0 = phydro->w0;
+
+  par_for(
+      "collision_debris_init", DevExeSpace(), 0, pmbp->nmb_thispack - 1, ks, ke,
+      js, je, is, ie, KOKKOS_LAMBDA(int m, int k, int j, int i) {
+        const Real x = CellCenterX(i - is, indcs.nx1, size.d_view(m).x1min,
+                                   size.d_view(m).x1max);
+        const Real y = CellCenterX(j - js, indcs.nx2, size.d_view(m).x2min,
+                                   size.d_view(m).x2max);
+        const Real z = CellCenterX(k - ks, indcs.nx3, size.d_view(m).x3min,
+                                   size.d_view(m).x3max);
+        // Background at rest: <coord> excision values in the excised region
+        // (as in gr_torus), <hydro> floors elsewhere. eint is the internal
+        // energy density (primitive IEN).
+        Real rho, eint;
+        const bool is_excised = coord.bh_excise && excised(m, k, j, i);
+        if (is_excised) {
+          rho = coord.dexcise;
+          eint = coord.pexcise / gm1;
+        } else {
+          rho = eos.dfloor;
+          eint = efloor;
+        }
+        Real uu1 = 0.0, uu2 = 0.0, uu3 = 0.0;
+
+        // Debris, with dx = x - x_coll and r = |dx| (coordinate distance):
+        //   density   rho_debris = rho_core                 r <  r_break_rho
+        //                        = rho_core (r/r_break_rho)^-8
+        //                                                   r >= r_break_rho
+        //   pressure  p = rho T kelvin_to_code, T = DebrisTemperature(r)
+        //   velocity  v^i = v_coll^i + vr_peak dx^i / r_peak    r <  r_peak
+        //                 = v_coll^i                            r >= r_peak
+        // Cells where rho_debris <= dfloor (r >= r_dfloor) keep the
+        // background.
+        const Real dx[3] = {x - debris.x_coll[0], y - debris.x_coll[1],
+                            z - debris.x_coll[2]};
+        const Real r = sqrt(SQR(dx[0]) + SQR(dx[1]) + SQR(dx[2]));
+        Real rho_debris = rho_core;
+        if (r >= r_break_rho) {
+          const Real s2 = SQR(r_break_rho / r);
+          rho_debris = rho_core * SQR(SQR(s2));
+        }
+        if (!is_excised && rho_debris > eos.dfloor) {
+          rho = rho_debris;
+          // eint = p / (gamma - 1), no lower than efloor.
+          const Real temp_k = DebrisTemperature(r, r_break_T, t_in, t_out);
+          eint = fmax(efloor, rho * temp_k * debris.kelvin_to_code / gm1);
+          // v^i is the normal-observer 3-velocity; the two terms add
+          // linearly since both are << c. The primitive is u^i = W v^i with
+          // W = 1 / sqrt(1 - gamma_ij v^i v^j).
+          Real v[3];
+          for (int d = 0; d < 3; ++d) {
+            v[d] = debris.v_coll[d];
+            if (r < r_peak)
+              v[d] += debris.vr_peak * dx[d] / r_peak;
+          }
+          Real glower[4][4], gupper[4][4];
+          ComputeMetricAndInverse(x, y, z, coord.is_minkowski, coord.bh_spin,
+                                  glower, gupper);
+          Real v2 = 0.0;
+          for (int a = 0; a < 3; ++a)
+            for (int b = 0; b < 3; ++b)
+              v2 += glower[a + 1][b + 1] * v[a] * v[b];
+          const Real lorentz = 1.0 / sqrt(1.0 - v2);
+          uu1 = lorentz * v[0];
+          uu2 = lorentz * v[1];
+          uu3 = lorentz * v[2];
+        }
+
+        w0(m, IDN, k, j, i) = rho;
+        w0(m, IEN, k, j, i) = eint;
+        w0(m, IVX, k, j, i) = uu1;
+        w0(m, IVY, k, j, i) = uu2;
+        w0(m, IVZ, k, j, i) = uu3;
+        for (int n = nhydro; n < nvars; ++n) {
+          w0(m, n, k, j, i) = 0.0;
+        }
+      });
+
+  phydro->peos->PrimToCons(w0, phydro->u0, is, ie, js, je, ks, ke);
+}
+
+namespace {
+
+//----------------------------------------------------------------------------------------
+//! \brief Outflow ("diode") boundary as in gr_torus: copy primitives from the
+//! last active cell into the ghosts, clipping the normal-frame velocity normal
+//! to the face so that nothing flows in, then rebuild the conserved ghosts.
+
+void NoInflowBoundary(Mesh *pm) {
+  auto *pmbp = pm->pmb_pack;
+  auto *phydro = pmbp->phydro;
+  const auto indcs = pm->mb_indcs;
+  const int ng = indcs.ng;
+  const int nc[3] = {indcs.nx1 + 2 * ng,
+                     (indcs.nx2 > 1) ? indcs.nx2 + 2 * ng : 1,
+                     (indcs.nx3 > 1) ? indcs.nx3 + 2 * ng : 1};
+  const int start[3] = {indcs.is, indcs.js, indcs.ks};
+  const int end[3] = {indcs.ie, indcs.je, indcs.ke};
+  const auto &mb_bcs = pmbp->pmb->mb_bcs;
+  auto &u0 = phydro->u0;
+  auto &w0 = phydro->w0;
+  const int nvars = phydro->nhydro + phydro->nscalars;
+
+  // Sweep the faces in x1, x2, x3 order. Each sweep includes the transverse
+  // ghosts, so edges and corners are filled too.
+  for (int axis = 0; axis < 3; ++axis) {
+    if (axis > 0 && nc[axis] == 1)
+      continue;
+    for (int side = 0; side < 2; ++side) {
+      const int face = 2 * axis + side;
+      if (pm->mesh_bcs[face] != BoundaryFlag::user)
+        continue;
+      const int edge = (side == 0) ? start[axis] : end[axis];
+      const int direction = (side == 0) ? -1 : 1;
+      int lo[3] = {0, 0, 0};
+      int hi[3] = {nc[0] - 1, nc[1] - 1, nc[2] - 1};
+      lo[axis] = (side == 0) ? edge - ng : edge;
+      hi[axis] = (side == 0) ? edge : edge + ng;
+
+      // Refresh the primitives of the boundary cell and ghost slab on every
+      // block (as in gr_torus); only blocks on a user face are then
+      // overwritten.
+      phydro->peos->ConsToPrim(u0, w0, false, lo[0], hi[0], lo[1], hi[1], lo[2],
+                               hi[2]);
+      const int na = (axis == 0) ? nc[1] : nc[0];
+      const int nb = (axis == 2) ? nc[1] : nc[2];
+      par_for(
+          "collision_debris_boundary", DevExeSpace(), 0, pmbp->nmb_thispack - 1,
+          0, nvars - 1, 0, nb - 1, 0, na - 1,
+          KOKKOS_LAMBDA(int m, int n, int b, int a) {
+            if (mb_bcs.d_view(m, face) != BoundaryFlag::user)
+              return;
+            int src[3];
+            src[0] = (axis == 0) ? edge : a;
+            src[1] = (axis == 0) ? a : ((axis == 1) ? edge : b);
+            src[2] = (axis == 2) ? edge : b;
+            Real value = w0(m, n, src[2], src[1], src[0]);
+            if (n == IVX + axis) {
+              value = (side == 0) ? fmin(0.0, value) : fmax(0.0, value);
+            }
+            for (int g = 1; g <= ng; ++g) {
+              int dst[3] = {src[0], src[1], src[2]};
+              dst[axis] += direction * g;
+              w0(m, n, dst[2], dst[1], dst[0]) = value;
+            }
+          });
+
+      // Convert back to conserved variables in the ghosts only, not in the
+      // active boundary cell.
+      lo[axis] = (side == 0) ? edge - ng : edge + 1;
+      hi[axis] = (side == 0) ? edge - 1 : edge + ng;
+      phydro->peos->PrimToCons(w0, u0, lo[0], hi[0], lo[1], hi[1], lo[2],
+                               hi[2]);
+    }
+  }
+}
+
+//----------------------------------------------------------------------------------------
+//! \brief Integrate hydro fluxes through a constant-r Kerr-Schild surface,
+//! with dA = sqrt(-g) dtheta dphi = (r^2 + a^2 cos^2 theta) dOmega.
+//! Signs match gr_torus:
+//!   mdot = -int rho u^r dA       > 0 for inflow
+//!   edot = -int T^r_t dA         energy, including rest mass
+//!   ldot = +int T^r_phi dA       < 0 for prograde inflow
+//! Folded surfaces still cover every angle of the full sphere, so the
+//! integrals need no extra factor of two.
+
+void AccretionFluxes(HistoryData *pdata, Mesh *pm) {
+  auto *pmbp = pm->pmb_pack;
+  auto *phydro = pmbp->phydro;
+  const Real spin = pmbp->pcoord->coord_data.bh_spin;
+  const Real gamma = phydro->peos->eos_data.gamma;
+  auto &grid = *pm->pgen->spherical_grids[pdata->user_index];
+  constexpr int nflux = 3;
+  static_assert(nflux <= NHISTORY_VARIABLES, "Too many accretion flux columns");
+  pdata->nhist = nflux;
+  pdata->label[0] = "mdot";
+  pdata->label[1] = "edot";
+  pdata->label[2] = "ldot";
+  pdata->symmetry_factor = (equatorial_fold == 0) ? 1 : 2;
+  pdata->header_params = {{"radius", grid.radius},
+                          {"nangles", static_cast<Real>(grid.nangles)},
+                          {"flux_ninterp", static_cast<Real>(grid.ninterp)}};
+  for (int n = 0; n < NHISTORY_VARIABLES; ++n)
+    pdata->hdata[n] = 0.0;
+  grid.InterpolateToSphere(phydro->nhydro, phydro->w0);
+
+  for (int n = 0; n < grid.nangles; ++n) {
+    const Real r = grid.radius;
+    const Real theta = grid.polar_pos.h_view(n, 0);
+    const Real x = grid.interp_coord.h_view(n, 0);
+    const Real y = grid.interp_coord.h_view(n, 1);
+    // A folded point is interpolated at its mirror image. Evaluate the metric
+    // and flux at the original point, and flip u^z, which is odd under the
+    // reflection.
+    const bool mirrored = equatorial_fold * std::cos(theta) < 0.0;
+    const Real z_sample = grid.interp_coord.h_view(n, 2);
+    const Real z = mirrored ? -z_sample : z_sample;
+    Real glower[4][4], gupper[4][4];
+    ComputeMetricAndInverse(x, y, z, false, spin, glower, gupper);
+
+    const Real rho = grid.interp_vals.h_view(n, IDN);
+    const Real eint = grid.interp_vals.h_view(n, IEN);
+    const Real uu[3] = {
+        grid.interp_vals.h_view(n, IVX), grid.interp_vals.h_view(n, IVY),
+        (mirrored ? -1.0 : 1.0) * grid.interp_vals.h_view(n, IVZ)};
+    Real q = 0.0;
+    for (int i = 0; i < 3; ++i) {
+      for (int j = 0; j < 3; ++j)
+        q += glower[i + 1][j + 1] * uu[i] * uu[j];
+    }
+    const Real alpha = std::sqrt(-1.0 / gupper[0][0]);
+    const Real lorentz = std::sqrt(1.0 + q);
+    Real u[4] = {lorentz / alpha, 0.0, 0.0, 0.0};
+    for (int i = 1; i < 4; ++i)
+      u[i] = uu[i - 1] - alpha * lorentz * gupper[0][i];
+    Real ucov[4] = {};
+    for (int i = 0; i < 4; ++i) {
+      for (int j = 0; j < 4; ++j)
+        ucov[i] += glower[i][j] * u[j];
+    }
+
+    const Real denom = 2.0 * SQR(r) - (SQR(x) + SQR(y) + SQR(z)) + SQR(spin);
+    const Real ur =
+        (r * x * u[1] + r * y * u[2] + (r + SQR(spin) / r) * z * u[3]) / denom;
+    const Real u_phi = -y * ucov[1] + x * ucov[2];
+    const Real area =
+        (SQR(r) + SQR(spin * std::cos(theta))) * grid.solid_angles.h_view(n);
+    const Real enthalpy = rho + gamma * eint;
+    pdata->hdata[0] -= rho * ur * area;
+    pdata->hdata[1] -= enthalpy * ur * ucov[0] * area;
+    pdata->hdata[2] += enthalpy * ur * u_phi * area;
+  }
+}
+
+} // namespace
