@@ -100,6 +100,7 @@ void SphericalGrid::SetInterpolationCoordinates() {
 
 void SphericalGrid::SetInterpolationIndices() {
   auto &size = pmy_pack->pmb->mb_size;
+  const auto &mesh_size = pmy_pack->pmesh->mesh_size;
   int nmb1 = pmy_pack->nmb_thispack - 1;
   int nang1 = nangles - 1;
 
@@ -126,11 +127,17 @@ void SphericalGrid::SetInterpolationIndices() {
       Real &dx2 = size.h_view(m).dx2;
       Real &dx3 = size.h_view(m).dx3;
 
-      // save MeshBlock and zone indicies for nearest position to spherical patch center
-      // if this angle position resides in this MeshBlock
-      if ((rcoord.h_view(n,0) >= x1min && rcoord.h_view(n,0) <= x1max) &&
-          (rcoord.h_view(n,1) >= x2min && rcoord.h_view(n,1) <= x2max) &&
-          (rcoord.h_view(n,2) >= x3min && rcoord.h_view(n,2) <= x3max)) {
+      // Use half-open block bounds so shared faces, edges, and corners have one owner
+      // across MPI ranks. Include upper faces only at the physical mesh boundary.
+      const Real x1 = rcoord.h_view(n,0);
+      const Real x2 = rcoord.h_view(n,1);
+      const Real x3 = rcoord.h_view(n,2);
+      if ((x1 >= x1min && (x1 < x1max ||
+                          (x1 == x1max && x1max == mesh_size.x1max))) &&
+          (x2 >= x2min && (x2 < x2max ||
+                          (x2 == x2max && x2max == mesh_size.x2max))) &&
+          (x3 >= x3min && (x3 < x3max ||
+                          (x3 == x3max && x3max == mesh_size.x3max)))) {
         iindcs.h_view(n,0) = m;
         iindcs.h_view(n,1) = static_cast<int>(std::floor((rcoord.h_view(n,0)-
                                                           (x1min+offset*dx1))/dx1));
