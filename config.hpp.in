@@ -19,6 +19,10 @@
 // use single precision floating-point values (binary32)? default=0 (false; use binary64)
 #define SINGLE_PRECISION_ENABLED @SINGLE_PRECISION_ENABLED@
 
+// GR metric in Cartesian harmonic Kerr coordinates instead of Cartesian Kerr-Schild?
+// default=0 (false; use Kerr-Schild)
+#define HARMONIC_KS_ENABLED @HARMONIC_KS_ENABLED@
+
 // use MPI parallelization? default=0 (false)
 #define MPI_PARALLEL_ENABLED @MPI_PARALLEL_ENABLED@
 

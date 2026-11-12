@@ -10,11 +10,17 @@
 //! includes inline functions to compute the metric and derivatives of the metric.  Based
 //! on functions in 'gr_user.cpp' file in Athena++, as well as CartesianGR.cpp function
 //! from CJW and SR.
+//!
+//! If compiled with -DAthena_HARMONIC_KS=ON (HARMONIC_KS_ENABLED), these functions
+//! instead return the Kerr metric in Cartesian harmonic coordinates (see
+//! harmonic_kerr.hpp), and SqrtMinusDetMetric() returns sqrt(-g), which is exactly 1 for
+//! Cartesian Kerr-Schild.
 
 #include "athena.hpp"
 #include "globals.hpp"
 #include "mesh/mesh.hpp"
 #include "coordinates/adm.hpp"
+#include "coordinates/harmonic_kerr.hpp"
 
 // #define SMALL_NUMBER 1.0e-5
 
@@ -26,6 +32,10 @@
 KOKKOS_INLINE_FUNCTION
 void ComputeMetricAndInverse(Real x, Real y, Real z, bool minkowski, Real a,
                              Real glower[][4], Real gupper[][4]) {
+#if HARMONIC_KS_ENABLED
+  harmonic_kerr::ComputeMetricAndInverse(x, y, z, minkowski, a, glower, gupper);
+  return;
+#endif
   // NOTE(@pdmullen): The following commented out floor on z dealt with the metric
   // singularity encountered for small z near the horizon (e.g., see g_00). However, this
   // floor was operating on z even for r_ks > 1.0, where (I believe) the metric should be
@@ -110,6 +120,11 @@ void ComputeADMDecomposition(Real x, Real y, Real z, bool minkowski, Real a,
                Real * psi4,
                Real * gxx, Real * gxy, Real * gxz, Real * gyy, Real * gyz, Real * gzz,
                Real * Kxx, Real * Kxy, Real * Kxz, Real * Kyy, Real * Kyz, Real * Kzz) {
+#if HARMONIC_KS_ENABLED
+  harmonic_kerr::ComputeADMDecomposition(x, y, z, minkowski, a, alp, betax, betay, betaz,
+      psi4, gxx, gxy, gxz, gyy, gyz, gzz, Kxx, Kxy, Kxz, Kyy, Kyz, Kzz);
+  return;
+#endif
   // See comments above in ComputeMetricAndInverse
   Real rad = sqrt(SQR(x) + SQR(y) + SQR(z));
   Real r = sqrt((SQR(rad)-SQR(a)+sqrt(SQR(SQR(rad)-SQR(a))+4.0*SQR(a)*SQR(z)))/2.0);
@@ -276,6 +291,10 @@ void ComputeADMDecomposition(Real x, Real y, Real z, bool minkowski, Real a,
 KOKKOS_INLINE_FUNCTION
 void ComputeMetricDerivatives(Real x, Real y, Real z, bool minkowski, Real a,
                               Real dg_dx1[][4], Real dg_dx2[][4], Real dg_dx3[][4]) {
+#if HARMONIC_KS_ENABLED
+  harmonic_kerr::ComputeMetricDerivatives(x, y, z, minkowski, a, dg_dx1, dg_dx2, dg_dx3);
+  return;
+#endif
   // NOTE(@pdmullen): See comment in ComputeMetricAndInverse
   // if (fabs(z) < (SMALL_NUMBER)) z = (SMALL_NUMBER);
   Real rad = sqrt(SQR(x) + SQR(y) + SQR(z));
@@ -378,5 +397,39 @@ void ComputeMetricDerivatives(Real x, Real y, Real z, bool minkowski, Real a,
   return;
 }
 
+
+//----------------------------------------------------------------------------------------
+//! \fn Real SqrtMinusDetMetric
+//! \brief sqrt(-det g) from the metric and its inverse. Conserved variables, fluxes,
+//! source terms and face-centered magnetic fields are densitized with this factor. It is
+//! identically 1 for Cartesian Kerr-Schild (and Minkowski), so it is only evaluated for
+//! harmonic coordinates.
+
+KOKKOS_INLINE_FUNCTION
+Real SqrtMinusDetMetric(const Real glower[][4], const Real gupper[][4]) {
+#if HARMONIC_KS_ENABLED
+  // det g = -alpha^2 det(gamma_ij), alpha^2 = -1/g^00
+  Real det3 = adm::SpatialDet(glower[1][1], glower[1][2], glower[1][3],
+                              glower[2][2], glower[2][3], glower[3][3]);
+  return sqrt(-det3/gupper[0][0]);
+#else
+  return 1.0;
+#endif
+}
+
+//----------------------------------------------------------------------------------------
+//! \fn Real BoyerLindquistRadius
+//! \brief Boyer-Lindquist radius at Cartesian (x,y,z): equal to the spheroidal radius of
+//! the coordinates for Kerr-Schild, and to the spheroidal radius plus M for harmonic.
+
+KOKKOS_INLINE_FUNCTION
+Real BoyerLindquistRadius(Real x, Real y, Real z, bool minkowski, Real a) {
+  Real rad = sqrt(SQR(x) + SQR(y) + SQR(z));
+  Real r = sqrt((SQR(rad)-SQR(a)+sqrt(SQR(SQR(rad)-SQR(a))+4.0*SQR(a)*SQR(z)))/2.0);
+#if HARMONIC_KS_ENABLED
+  if (!minkowski) r += 1.0;
+#endif
+  return r;
+}
 
 #endif // COORDINATES_CARTESIAN_KS_HPP_

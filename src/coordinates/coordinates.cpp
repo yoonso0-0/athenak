@@ -44,6 +44,15 @@ Coordinates::Coordinates(ParameterInput *pin, MeshBlockPack *ppack) :
 
   // Read properties of metric and excision from input file for GR.
   if (is_general_relativistic || is_dynamical_relativistic) {
+#if HARMONIC_KS_ENABLED
+    // the orthonormal tetrad used by radiation is only implemented for Kerr-Schild
+    if (pin->DoesBlockExist("radiation")) {
+      std::cout << "### FATAL ERROR in "<< __FILE__ <<" at line " << __LINE__ << std::endl
+                << "Radiation is not supported with harmonic Kerr coordinates "
+                << "(Athena_HARMONIC_KS)" << std::endl;
+      std::exit(EXIT_FAILURE);
+    }
+#endif
     coord_data.is_minkowski = pin->GetOrAddBoolean("coord","minkowski",false);
     if (!(coord_data.is_minkowski)) {
       coord_data.bh_spin = pin->GetReal("coord","a");
@@ -63,11 +72,19 @@ Coordinates::Coordinates(ParameterInput *pin, MeshBlockPack *ppack) :
         coord_data.pexcise = pin->GetReal("coord", "pexcise");
       }
 
+      // Excision radii are Boyer-Lindquist radii; by default excise r <= M in CKS.
+      // Harmonic coordinates only cover r >= M (spheroidal radius R = r - M >= 0) and are
+      // singular at R = 0, so there excise R <= R_H/2, i.e. r <= M + sqrt(M^2-a^2)/2.
+#if HARMONIC_KS_ENABLED
+      Real rexcise_default = 1.0 + 0.5*sqrt(1.0-SQR(coord_data.bh_spin));
+#else
+      Real rexcise_default = 1.0;
+#endif
       coord_data.flux_excise_r = (pin->DoesBlockExist("radiation")) ?
         1.0+sqrt(1.0-SQR(coord_data.bh_spin)) :
-        pin->GetOrAddReal("coord","flux_excise_r",1.0);
-      coord_data.rexcise =
-        (pin->DoesBlockExist("radiation")) ? 1.0+sqrt(1.0-SQR(coord_data.bh_spin)) : 1.0;
+        pin->GetOrAddReal("coord","flux_excise_r",rexcise_default);
+      coord_data.rexcise = (pin->DoesBlockExist("radiation")) ?
+        1.0+sqrt(1.0-SQR(coord_data.bh_spin)) : rexcise_default;
 
       coord_data.excision_scheme = ExcisionScheme::fixed;
       if (is_dynamical_relativistic) {
