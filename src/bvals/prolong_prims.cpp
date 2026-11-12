@@ -101,6 +101,7 @@ void MeshBoundaryValuesCC::ConsToPrimCoarseBndry(const DvceArray5D<Real> &cons,
         HydPrim1D w;
 
         bool dfloor_used=false, efloor_used=false, tfloor_used=false;
+        Real sqrt_mg = 1.0;  // GR conserved variables are densitized by sqrt(-g)
         if (is_gr) {
           Real &x1min = size.d_view(m).x1min;
           Real &x1max = size.d_view(m).x1max;
@@ -117,6 +118,12 @@ void MeshBoundaryValuesCC::ConsToPrimCoarseBndry(const DvceArray5D<Real> &cons,
 
           Real glower[4][4], gupper[4][4];
           ComputeMetricAndInverse(x1v, x2v, x3v, flat, spin, glower, gupper);
+          sqrt_mg = SqrtMinusDetMetric(glower, gupper);  // identically 1 in Kerr-Schild
+          u.d  /= sqrt_mg;
+          u.mx /= sqrt_mg;
+          u.my /= sqrt_mg;
+          u.mz /= sqrt_mg;
+          u.e  /= sqrt_mg;
 
           HydCons1D u_sr;
           Real s2;
@@ -172,7 +179,7 @@ void MeshBoundaryValuesCC::ConsToPrimCoarseBndry(const DvceArray5D<Real> &cons,
           if (cons(m,n,k,j,i) < 0.0) {
             cons(m,n,k,j,i) = 0.0;
           }
-          prim(m,n,k,j,i) = cons(m,n,k,j,i)/u.d;
+          prim(m,n,k,j,i) = cons(m,n,k,j,i)/(sqrt_mg*u.d);
         }
       });
     }
@@ -253,6 +260,7 @@ void MeshBoundaryValuesCC::PrimToConsFineBndry(const DvceArray5D<Real> &prim,
         w.e  = prim(m,IEN,k,j,i);
         HydCons1D u;
 
+        Real sqrt_mg = 1.0;  // GR conserved variables are densitized by sqrt(-g)
         if (is_gr) {
           Real &x1min = size.d_view(m).x1min;
           Real &x1max = size.d_view(m).x1max;
@@ -268,6 +276,7 @@ void MeshBoundaryValuesCC::PrimToConsFineBndry(const DvceArray5D<Real> &prim,
 
           Real glower[4][4], gupper[4][4];
           ComputeMetricAndInverse(x1v, x2v, x3v, flat, spin, glower, gupper);
+          sqrt_mg = SqrtMinusDetMetric(glower, gupper);  // identically 1 in Kerr-Schild
           SingleP2C_IdealGRHyd(glower, gupper, w, gamma, u);
         } else if (is_sr) {
           SingleP2C_IdealSRHyd(w, gamma, u);
@@ -276,15 +285,15 @@ void MeshBoundaryValuesCC::PrimToConsFineBndry(const DvceArray5D<Real> &prim,
         }
 
         // Set conserved quantities
-        cons(m,IDN,k,j,i) = u.d;
-        cons(m,IM1,k,j,i) = u.mx;
-        cons(m,IM2,k,j,i) = u.my;
-        cons(m,IM3,k,j,i) = u.mz;
-        cons(m,IEN,k,j,i) = u.e;
+        cons(m,IDN,k,j,i) = sqrt_mg*u.d;
+        cons(m,IM1,k,j,i) = sqrt_mg*u.mx;
+        cons(m,IM2,k,j,i) = sqrt_mg*u.my;
+        cons(m,IM3,k,j,i) = sqrt_mg*u.mz;
+        cons(m,IEN,k,j,i) = sqrt_mg*u.e;
 
         // convert scalars (if any)
         for (int n=nhyd; n<(nhyd+nscal); ++n) {
-          cons(m,n,k,j,i) = u.d*prim(m,n,k,j,i);
+          cons(m,n,k,j,i) = (sqrt_mg*u.d)*prim(m,n,k,j,i);
         }
       });
     }

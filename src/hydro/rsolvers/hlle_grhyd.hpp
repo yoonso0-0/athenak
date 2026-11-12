@@ -193,12 +193,13 @@ void HLLE_GR(const EOS_Data &eos, const RegionIndcs &indcs,
     flux_interface = &flux_hll;
   }
 
-  // Set fluxes
-  flx(m,IDN,k,j,i) = flux_interface->d;
-  flx(m,ivx,k,j,i) = flux_interface->mx;
-  flx(m,ivy,k,j,i) = flux_interface->my;
-  flx(m,ivz,k,j,i) = flux_interface->mz;
-  flx(m,IEN,k,j,i) = flux_interface->e;
+  // Set fluxes, densitized by sqrt(-g) at the face (identically 1 in Kerr-Schild)
+  Real sqrt_mg = SqrtMinusDetMetric(glower, gupper);
+  flx(m,IDN,k,j,i) = sqrt_mg*flux_interface->d;
+  flx(m,ivx,k,j,i) = sqrt_mg*flux_interface->mx;
+  flx(m,ivy,k,j,i) = sqrt_mg*flux_interface->my;
+  flx(m,ivz,k,j,i) = sqrt_mg*flux_interface->mz;
+  flx(m,IEN,k,j,i) = sqrt_mg*flux_interface->e;
 
   // We evolve tau = T^t_t + D
   flx(m,IEN,k,j,i) += flx(m,IDN,k,j,i);

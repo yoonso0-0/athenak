@@ -274,12 +274,13 @@ void SingleStateLLF_GRHyd(const HydPrim1D wl, const HydPrim1D wr,
   fr.mz = qa * ulr[ivz];
   fr.e  = qa * ulr[0];
 
-  // Compute the LLF flux at the interface
-  flux.d  = 0.5 * (fl.d  + fr.d  - lambda * du.d);
-  flux.mx = 0.5 * (fl.mx + fr.mx - lambda * du.mx);
-  flux.my = 0.5 * (fl.my + fr.my - lambda * du.my);
-  flux.mz = 0.5 * (fl.mz + fr.mz - lambda * du.mz);
-  flux.e  = 0.5 * (fl.e  + fr.e  - lambda * du.e);
+  // Compute the LLF flux at the interface, densitized by sqrt(-g) (identically 1 in KS)
+  Real sqrt_mg = SqrtMinusDetMetric(glower, gupper);
+  flux.d  = sqrt_mg * (0.5 * (fl.d  + fr.d  - lambda * du.d));
+  flux.mx = sqrt_mg * (0.5 * (fl.mx + fr.mx - lambda * du.mx));
+  flux.my = sqrt_mg * (0.5 * (fl.my + fr.my - lambda * du.my));
+  flux.mz = sqrt_mg * (0.5 * (fl.mz + fr.mz - lambda * du.mz));
+  flux.e  = sqrt_mg * (0.5 * (fl.e  + fr.e  - lambda * du.e));
 
   // We evolve tau = T^t_t + D
   flux.e  += flux.d;
