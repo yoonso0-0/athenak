@@ -89,6 +89,10 @@ void HLLE_GR(const EOS_Data &eos, const RegionIndcs &indcs,
   Real glower[4][4], gupper[4][4];
   ComputeMetricAndInverse(x1v, x2v, x3v, flat, spin, glower, gupper);
 
+  // face-centered fields and fluxes are densitized by sqrt(-g) (identically 1 in KS)
+  Real sqrt_mg = SqrtMinusDetMetric(glower, gupper);
+  bxi /= sqrt_mg;
+
   // Calculate 4-velocity in left state (contravariant compt)
   Real q = glower[ivx][ivx] * SQR(wl_ivx) + glower[ivy][ivy] * SQR(wl_ivy) +
            glower[ivz][ivz] * SQR(wl_ivz) + 2.0*glower[ivx][ivy] * wl_ivx * wl_ivy +
@@ -263,14 +267,14 @@ void HLLE_GR(const EOS_Data &eos, const RegionIndcs &indcs,
   }
 
   // Set fluxes
-  flx(m,IDN,k,j,i) = flux_interface->d;
-  flx(m,ivx,k,j,i) = flux_interface->mx;
-  flx(m,ivy,k,j,i) = flux_interface->my;
-  flx(m,ivz,k,j,i) = flux_interface->mz;
-  flx(m,IEN,k,j,i) = flux_interface->e;
+  flx(m,IDN,k,j,i) = sqrt_mg*flux_interface->d;
+  flx(m,ivx,k,j,i) = sqrt_mg*flux_interface->mx;
+  flx(m,ivy,k,j,i) = sqrt_mg*flux_interface->my;
+  flx(m,ivz,k,j,i) = sqrt_mg*flux_interface->mz;
+  flx(m,IEN,k,j,i) = sqrt_mg*flux_interface->e;
 
-  ey(m,k,j,i) = -flux_interface->by;
-  ez(m,k,j,i) =  flux_interface->bz;
+  ey(m,k,j,i) = -sqrt_mg*flux_interface->by;
+  ez(m,k,j,i) =  sqrt_mg*flux_interface->bz;
 
   // We evolve tau = T^t_t + D
   flx(m,IEN,k,j,i) += flx(m,IDN,k,j,i);

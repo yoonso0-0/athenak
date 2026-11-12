@@ -102,6 +102,8 @@ TaskStatus MHD::CornerE(Driver *pdriver, int stage) {
 
         Real glower[4][4], gupper[4][4];
         ComputeMetricAndInverse(x1v, x2v, x3v, flat, spin, glower, gupper);
+        // EMFs are densitized by sqrt(-g) (identically 1 in Kerr-Schild)
+        Real sqrt_mg = SqrtMinusDetMetric(glower, gupper);
 
         const Real &ux = w0_(m,IVX,ks,j,i);
         const Real &uy = w0_(m,IVY,ks,j,i);
@@ -129,7 +131,7 @@ TaskStatus MHD::CornerE(Driver *pdriver, int stage) {
         Real b2 = (by + b0 * u2) / u0;
         //Real b3 = (bz + b0 * u3) / u0;
 
-        e3cc_(m,ks,j,i) = b1 * u2 - b2 * u1;
+        e3cc_(m,ks,j,i) = sqrt_mg*(b1 * u2 - b2 * u1);
       });
 
     // compute cell-centered EMF in SR MHD
@@ -259,6 +261,8 @@ TaskStatus MHD::CornerE(Driver *pdriver, int stage) {
 
         Real glower[4][4], gupper[4][4];
         ComputeMetricAndInverse(x1v, x2v, x3v, flat, spin, glower, gupper);
+        // EMFs are densitized by sqrt(-g) (identically 1 in Kerr-Schild)
+        Real sqrt_mg = SqrtMinusDetMetric(glower, gupper);
 
         const Real &ux = w0_(m,IVX,k,j,i);
         const Real &uy = w0_(m,IVY,k,j,i);
@@ -286,9 +290,9 @@ TaskStatus MHD::CornerE(Driver *pdriver, int stage) {
         Real b2 = (by + b0 * u2) / u0;
         Real b3 = (bz + b0 * u3) / u0;
 
-        e1cc_(m,k,j,i) = b2 * u3 - b3 * u2;
-        e2cc_(m,k,j,i) = b3 * u1 - b1 * u3;
-        e3cc_(m,k,j,i) = b1 * u2 - b2 * u1;
+        e1cc_(m,k,j,i) = sqrt_mg*(b2 * u3 - b3 * u2);
+        e2cc_(m,k,j,i) = sqrt_mg*(b3 * u1 - b1 * u3);
+        e3cc_(m,k,j,i) = sqrt_mg*(b1 * u2 - b2 * u1);
       });
 
     // compute cell-centered EMFs in SR MHD

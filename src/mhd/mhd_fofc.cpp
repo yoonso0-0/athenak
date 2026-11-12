@@ -61,6 +61,11 @@ void MHD::FOFC(Driver *pdriver, int stage) {
     auto &utest_ = utest;
     auto &bcctest_ = bcctest;
     auto &b1_ = b1;
+#if HARMONIC_KS_ENABLED
+    bool is_gr = pmy_pack->pcoord->is_general_relativistic;
+    auto &flat = pmy_pack->pcoord->coord_data.is_minkowski;
+    auto &spin = pmy_pack->pcoord->coord_data.bh_spin;
+#endif
 
     // Index bounds
     int il = is-1, iu = ie+1, jl = js, ju = je, kl = ks, ku = ke;
@@ -91,9 +96,22 @@ void MHD::FOFC(Driver *pdriver, int stage) {
       Real b2old = 0.5*(b1_.x2f(m,k,j,i) + b1_.x2f(m,k,j+1,i));
       Real b3old = 0.5*(b1_.x3f(m,k,j,i) + b1_.x3f(m,k+1,j,i));
 
-      bcctest_(m,IBX,k,j,i) = gam0*bcc0_(m,IBX,k,j,i) + gam1*b1old;
-      bcctest_(m,IBY,k,j,i) = gam0*bcc0_(m,IBY,k,j,i) + gam1*b2old;
-      bcctest_(m,IBZ,k,j,i) = gam0*bcc0_(m,IBZ,k,j,i) + gam1*b3old;
+      // face-centered fields and EMFs are densitized by sqrt(-g) in GR, while bcc0 is not
+      // (sqrt(-g) is identically 1 in Kerr-Schild), so the test fields are densitized
+      Real sqrt_mg = 1.0;
+#if HARMONIC_KS_ENABLED
+      if (is_gr) {
+        Real x1v = CellCenterX(i-is, nx1, size.d_view(m).x1min, size.d_view(m).x1max);
+        Real x2v = CellCenterX(j-js, nx2, size.d_view(m).x2min, size.d_view(m).x2max);
+        Real x3v = CellCenterX(k-ks, nx3, size.d_view(m).x3min, size.d_view(m).x3max);
+        Real glower[4][4], gupper[4][4];
+        ComputeMetricAndInverse(x1v, x2v, x3v, flat, spin, glower, gupper);
+        sqrt_mg = SqrtMinusDetMetric(glower, gupper);
+      }
+#endif
+      bcctest_(m,IBX,k,j,i) = gam0*(sqrt_mg*bcc0_(m,IBX,k,j,i)) + gam1*b1old;
+      bcctest_(m,IBY,k,j,i) = gam0*(sqrt_mg*bcc0_(m,IBY,k,j,i)) + gam1*b2old;
+      bcctest_(m,IBZ,k,j,i) = gam0*(sqrt_mg*bcc0_(m,IBZ,k,j,i)) + gam1*b3old;
 
       bcctest_(m,IBY,k,j,i) += dtodx1*(e3x1_(m,k,j,i+1) - e3x1_(m,k,j,i));
       bcctest_(m,IBZ,k,j,i) -= dtodx1*(e2x1_(m,k,j,i+1) - e2x1_(m,k,j,i));

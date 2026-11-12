@@ -316,6 +316,8 @@ void SingleP2C_IdealSRMHD(const MHDPrim1D &w, const Real gam, HydCons1D &u) {
 //! \brief Converts single state of conserved variables in GR MHD into conserved
 //! variables for special relativistic MHD with an ideal gas EOS. This allows
 //! the ConsToPrim() function in GR MHD to use SingleP2C_IdealSRMHD() function.
+//! The input state must not be densitized: callers divide the evolved variables and
+//! fields by sqrt(-g) first (see SqrtMinusDetMetric() in cartesian_ks.hpp).
 
 KOKKOS_INLINE_FUNCTION
 void TransformToSRMHD(const MHDCons1D &u, Real glower[][4], Real gupper[][4],

@@ -222,12 +222,14 @@ void SingleStateLLF_GRMHD(const MHDPrim1D wl, const MHDPrim1D wr, const Real bx,
   wl_ipr = eos.IdealGasPressure(wl.e);
   wr_ipr = eos.IdealGasPressure(wr.e);
 
-  // reference to longitudinal field
-  const Real &bxi = bx;
-
   // Extract components of metric
   Real glower[4][4], gupper[4][4];
   ComputeMetricAndInverse(x1v,x2v,x3v,coord.is_minkowski, coord.bh_spin, glower, gupper);
+
+  // longitudinal field (face-centered fields and fluxes are densitized by sqrt(-g),
+  // which is identically 1 in Kerr-Schild)
+  Real sqrt_mg = SqrtMinusDetMetric(glower, gupper);
+  const Real bxi = bx/sqrt_mg;
 
   // Calculate 4-velocity in left state (contravariant compt)
   Real q = glower[ivx][ivx] * SQR(wl_ivx) + glower[ivy][ivy] * SQR(wl_ivy) +
@@ -382,13 +384,13 @@ void SingleStateLLF_GRMHD(const MHDPrim1D wl, const MHDPrim1D wr, const Real bx,
   fr.bz = bur[ivz] * uur[ivx] - bur[ivx] * uur[ivz];
 
   // Compute the LLF flux at the interface
-  flux.d  =  0.5 * (fl.d  + fr.d  - lambda * du.d);
-  flux.mx =  0.5 * (fl.mx + fr.mx - lambda * du.mx);
-  flux.my =  0.5 * (fl.my + fr.my - lambda * du.my);
-  flux.mz =  0.5 * (fl.mz + fr.mz - lambda * du.mz);
-  flux.e  =  0.5 * (fl.e  + fr.e  - lambda * du.e);
-  flux.by = -0.5 * (fl.by + fr.by - lambda * du.by);
-  flux.bz =  0.5 * (fl.bz + fr.bz - lambda * du.bz);
+  flux.d  =  sqrt_mg * ( 0.5 * (fl.d  + fr.d  - lambda * du.d));
+  flux.mx =  sqrt_mg * ( 0.5 * (fl.mx + fr.mx - lambda * du.mx));
+  flux.my =  sqrt_mg * ( 0.5 * (fl.my + fr.my - lambda * du.my));
+  flux.mz =  sqrt_mg * ( 0.5 * (fl.mz + fr.mz - lambda * du.mz));
+  flux.e  =  sqrt_mg * ( 0.5 * (fl.e  + fr.e  - lambda * du.e));
+  flux.by =  sqrt_mg * (-0.5 * (fl.by + fr.by - lambda * du.by));
+  flux.bz =  sqrt_mg * ( 0.5 * (fl.bz + fr.bz - lambda * du.bz));
 
   // We evolve tau = T^t_t + D
   flux.e  += flux.d;
