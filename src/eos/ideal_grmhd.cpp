@@ -80,7 +80,8 @@ void IdealGRMHD::ConsToPrim(DvceArray5D<Real> &cons, const DvceFaceFld4D<Real> &
     u.mz = cons(m,IM3,k,j,i);
     u.e  = cons(m,IEN,k,j,i);
 
-    // load cell-centered fields into conserved state
+    // load cell-centered fields into conserved state (densitized by sqrt(-g), like the
+    // face-centered fields)
     // use input CC fields if only testing floors with FOFC
     if (only_testfloors) {
       u.bx = bcc(m,IBX,k,j,i);
@@ -108,6 +109,17 @@ void IdealGRMHD::ConsToPrim(DvceArray5D<Real> &cons, const DvceFaceFld4D<Real> &
 
     Real glower[4][4], gupper[4][4];
     ComputeMetricAndInverse(x1v, x2v, x3v, flat, spin, glower, gupper);
+
+    // conserved variables and fields are densitized by sqrt(-g) (identically 1 in KS)
+    Real sqrt_mg = SqrtMinusDetMetric(glower, gupper);
+    u.d  /= sqrt_mg;
+    u.mx /= sqrt_mg;
+    u.my /= sqrt_mg;
+    u.mz /= sqrt_mg;
+    u.e  /= sqrt_mg;
+    u.bx /= sqrt_mg;
+    u.by /= sqrt_mg;
+    u.bz /= sqrt_mg;
 
     HydPrim1D w;
     bool dfloor_used=false, efloor_used=false;
@@ -198,17 +210,17 @@ void IdealGRMHD::ConsToPrim(DvceArray5D<Real> &cons, const DvceFaceFld4D<Real> &
 
         HydCons1D u_out;
         SingleP2C_IdealGRMHD(glower, gupper, w_in, eos.gamma, u_out);
-        cons(m,IDN,k,j,i) = u_out.d;
-        cons(m,IM1,k,j,i) = u_out.mx;
-        cons(m,IM2,k,j,i) = u_out.my;
-        cons(m,IM3,k,j,i) = u_out.mz;
-        cons(m,IEN,k,j,i) = u_out.e;
+        cons(m,IDN,k,j,i) = sqrt_mg*u_out.d;
+        cons(m,IM1,k,j,i) = sqrt_mg*u_out.mx;
+        cons(m,IM2,k,j,i) = sqrt_mg*u_out.my;
+        cons(m,IM3,k,j,i) = sqrt_mg*u_out.mz;
+        cons(m,IEN,k,j,i) = sqrt_mg*u_out.e;
         u.d = u_out.d;  // (needed if there are scalars below)
       }
 
       // convert scalars (if any)
       for (int n=nmhd; n<(nmhd+nscal); ++n) {
-        prim(m,n,k,j,i) = cons(m,n,k,j,i)/u.d;
+        prim(m,n,k,j,i) = cons(m,n,k,j,i)/(sqrt_mg*u.d);
       }
     }
   }, Kokkos::Sum<int>(nfloord_), Kokkos::Sum<int>(nfloore_), Kokkos::Sum<int>(nceilv_),
@@ -282,15 +294,17 @@ void IdealGRMHD::PrimToCons(const DvceArray5D<Real> &prim, const DvceArray5D<Rea
     SingleP2C_IdealGRMHD(glower, gupper, w, gamma, u);
 
     // store conserved quantities in 3D array
-    cons(m,IDN,k,j,i) = u.d;
-    cons(m,IM1,k,j,i) = u.mx;
-    cons(m,IM2,k,j,i) = u.my;
-    cons(m,IM3,k,j,i) = u.mz;
-    cons(m,IEN,k,j,i) = u.e;
+    // densitize by sqrt(-g) (identically 1 in Kerr-Schild)
+    Real sqrt_mg = SqrtMinusDetMetric(glower, gupper);
+    cons(m,IDN,k,j,i) = sqrt_mg*u.d;
+    cons(m,IM1,k,j,i) = sqrt_mg*u.mx;
+    cons(m,IM2,k,j,i) = sqrt_mg*u.my;
+    cons(m,IM3,k,j,i) = sqrt_mg*u.mz;
+    cons(m,IEN,k,j,i) = sqrt_mg*u.e;
 
     // convert scalars (if any)
     for (int n=nmhd; n<(nmhd+nscal); ++n) {
-      cons(m,n,k,j,i) = u.d*prim(m,n,k,j,i);
+      cons(m,n,k,j,i) = (sqrt_mg*u.d)*prim(m,n,k,j,i);
     }
   });
 
