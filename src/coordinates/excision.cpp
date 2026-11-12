@@ -13,14 +13,19 @@
 #include "coordinates.hpp"
 #include "cell_locations.hpp"
 #include "coordinates/adm.hpp"
+#include "coordinates/cartesian_ks.hpp"
 #include "z4c/z4c.hpp"
 #include "z4c/fastflow.hpp"
 
-// inlined spherical Kerr-Schild r evaluated at CKS x1, x2, x3
+// inlined Boyer-Lindquist r (spherical Kerr-Schild r for CKS) evaluated at x1, x2, x3
 KOKKOS_INLINE_FUNCTION
 Real KSRX(const Real x1, const Real x2, const Real x3, const Real a) {
+#if HARMONIC_KS_ENABLED
+  return BoyerLindquistRadius(x1, x2, x3, false, a);
+#else
   Real rad = sqrt(SQR(x1) + SQR(x2) + SQR(x3));
   return sqrt((SQR(rad)-SQR(a)+sqrt(SQR(SQR(rad)-SQR(a))+4.0*SQR(a)*SQR(x3)))/2.0);
+#endif
 }
 
 //----------------------------------------------------------------------------------------

@@ -34,6 +34,7 @@ endif()
 option(Athena_SINGLE_PRECISION "Compile for single precision" OFF)
 option(Athena_ENABLE_MPI "Compile with MPI parallelism enabled" OFF)
 option(Athena_ENABLE_OPENMP "Compile with OpenMP parallelism enabled" OFF)
+option(Athena_HARMONIC_KS "Use harmonic Kerr coordinates instead of Kerr-Schild in GR" OFF)
 set(PROBLEM built_in_pgens CACHE STRING "Name of problem generator function")
 
 #------ set macros exported to config.hpp ------------------------------------------------
@@ -43,6 +44,13 @@ if (Athena_SINGLE_PRECISION)
   set(SINGLE_PRECISION_ENABLED 1)
 else()
   set(SINGLE_PRECISION_ENABLED 0)
+endif()
+
+# set harmonic Kerr coordinates macro (true/false)
+if (Athena_HARMONIC_KS)
+  set(HARMONIC_KS_ENABLED 1)
+else()
+  set(HARMONIC_KS_ENABLED 0)
 endif()
 
 # set MPI macro (true/false)
