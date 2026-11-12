@@ -65,6 +65,8 @@ static Real TemperatureResidual(struct bondi_pgen pgen, Real t, Real r);
 
 struct bondi_pgen {
   Real spin;                // black hole spin
+  Real r_shift;             // r_BL minus spheroidal radius (0: KS, 1: harmonic)
+  Real r_excise;            // BL radius inside which the solution is the excised state
   Real dexcise, pexcise;    // excision parameters
   Real n_adi, k_adi, gm;    // hydro EOS parameters
   Real r_crit;              // sonic point radius
@@ -127,6 +129,13 @@ void ProblemGenerator::BondiAccretion(ParameterInput *pin, const bool restart) {
 
   // Get spin of black hole
   bondi.spin = pmbp->pcoord->coord_data.bh_spin;
+#if HARMONIC_KS_ENABLED
+  bondi.r_shift = 1.0;   // harmonic spheroidal radius is r_BL - M
+#else
+  bondi.r_shift = 0.0;   // Kerr-Schild spheroidal radius is r_BL
+#endif
+  bondi.r_excise = (pmbp->pcoord->coord_data.bh_excise) ?
+                   pmbp->pcoord->coord_data.rexcise : 1.0;
 
   // Get excision parameters
   bondi.dexcise = pmbp->pcoord->coord_data.dexcise;
@@ -285,7 +294,7 @@ static void ComputePrimitiveSingle(Real x1v, Real x2v, Real x3v, CoordData coord
   Real b = glower[0][1]*u1 + glower[0][2]*u2 + glower[0][3]*u3;
   u0 = (-b - sqrt(fmax(SQR(b) - glower[0][0]*gammasq, 0.0)))/glower[0][0];
 
-  if (r > 1.0) {
+  if (r > pgen.r_excise) {
     rho = my_rho;
     pgas = my_pgas;
     uu1 = u1 - gupper[0][1]/gupper[0][0] * u0;
@@ -314,12 +323,15 @@ KOKKOS_INLINE_FUNCTION
 static void GetBoyerLindquistCoordinates(struct bondi_pgen pgen,
                                          Real x1, Real x2, Real x3,
                                          Real *pr, Real *ptheta, Real *pphi) {
+    // spheroidal coordinate radius rs (= r_BL for KS, r_BL - M for harmonic coordinates)
     Real rad = sqrt(SQR(x1) + SQR(x2) + SQR(x3));
-    Real r = fmax((sqrt( SQR(rad) - SQR(pgen.spin) + sqrt(SQR(SQR(rad)-SQR(pgen.spin))
-                        + 4.0*SQR(pgen.spin)*SQR(x3)) ) / sqrt(2.0)), 1.0);
+    Real rs = fmax((sqrt( SQR(rad) - SQR(pgen.spin) + sqrt(SQR(SQR(rad)-SQR(pgen.spin))
+                         + 4.0*SQR(pgen.spin)*SQR(x3)) ) / sqrt(2.0)),
+                   fmax(1.0 - pgen.r_shift, 1.0e-6));
+    Real r = rs + pgen.r_shift;
     *pr = r;
-    *ptheta = acos(x3/r);
-    *pphi = atan2(r*x2-pgen.spin*x1, pgen.spin*x2+r*x1) -
+    *ptheta = acos(x3/rs);
+    *pphi = atan2(rs*x2-pgen.spin*x1, pgen.spin*x2+rs*x1) -
             pgen.spin*r/(SQR(r)-2.0*r+SQR(pgen.spin));
   return;
 }
@@ -328,7 +340,7 @@ static void GetBoyerLindquistCoordinates(struct bondi_pgen pgen,
 // Function for transforming 4-vector from Boyer-Lindquist to desired coordinates
 // Inputs:
 //   a0_bl,a1_bl,a2_bl,a3_bl: upper 4-vector components in Boyer-Lindquist coordinates
-//   x1,x2,x3: Cartesian Kerr-Schild coordinates of point
+//   x1,x2,x3: Cartesian Kerr-Schild or harmonic coordinates of point
 // Outputs:
 //   pa0,pa1,pa2,pa3: pointers to upper 4-vector components in desired coordinates
 // Notes:
@@ -339,18 +351,22 @@ static void TransformVector(struct bondi_pgen pgen,
                             Real a1_bl, Real a2_bl, Real a3_bl,
                             Real x1, Real x2, Real x3,
                             Real *pa1, Real *pa2, Real *pa3) {
+  // Both coordinate systems have x + iy = (rs + ia) e^{i phi_KS} sin(theta) and
+  // z = rs cos(theta), with spheroidal radius rs = r_BL - r_shift (so d rs = d r_BL).
   Real rad = sqrt( SQR(x1) + SQR(x2) + SQR(x3) );
-  Real r = fmax((sqrt( SQR(rad) - SQR(pgen.spin) + sqrt(SQR(SQR(rad)-SQR(pgen.spin))
-                      + 4.0*SQR(pgen.spin)*SQR(x3)) ) / sqrt(2.0)), 1.0);
+  Real rs = fmax((sqrt( SQR(rad) - SQR(pgen.spin) + sqrt(SQR(SQR(rad)-SQR(pgen.spin))
+                       + 4.0*SQR(pgen.spin)*SQR(x3)) ) / sqrt(2.0)),
+                 fmax(1.0 - pgen.r_shift, 1.0e-6));
+  Real r = rs + pgen.r_shift;
   Real delta = SQR(r) - 2.0*r + SQR(pgen.spin);
-  *pa1 = a1_bl * ( (r*x1+pgen.spin*x2)/(SQR(r) + SQR(pgen.spin)) - x2*pgen.spin/delta) +
-         a2_bl * x1*x3/r * sqrt((SQR(r) + SQR(pgen.spin))/(SQR(x1) + SQR(x2))) -
+  *pa1 = a1_bl * ( (rs*x1+pgen.spin*x2)/(SQR(rs) + SQR(pgen.spin)) - x2*pgen.spin/delta) +
+         a2_bl * x1*x3/rs * sqrt((SQR(rs) + SQR(pgen.spin))/(SQR(x1) + SQR(x2))) -
          a3_bl * x2;
-  *pa2 = a1_bl * ( (r*x2-pgen.spin*x1)/(SQR(r) + SQR(pgen.spin)) + x1*pgen.spin/delta) +
-         a2_bl * x2*x3/r * sqrt((SQR(r) + SQR(pgen.spin))/(SQR(x1) + SQR(x2))) +
+  *pa2 = a1_bl * ( (rs*x2-pgen.spin*x1)/(SQR(rs) + SQR(pgen.spin)) + x1*pgen.spin/delta) +
+         a2_bl * x2*x3/rs * sqrt((SQR(rs) + SQR(pgen.spin))/(SQR(x1) + SQR(x2))) +
          a3_bl * x1;
-  *pa3 = a1_bl * x3/r -
-         a2_bl * r * sqrt((SQR(x1) + SQR(x2))/(SQR(r) + SQR(pgen.spin)));
+  *pa3 = a1_bl * x3/rs -
+         a2_bl * rs * sqrt((SQR(x1) + SQR(x2))/(SQR(rs) + SQR(pgen.spin)));
   return;
 }
 
