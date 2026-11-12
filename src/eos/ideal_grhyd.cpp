@@ -96,6 +96,14 @@ void IdealGRHydro::ConsToPrim(DvceArray5D<Real> &cons, DvceArray5D<Real> &prim,
     Real glower[4][4], gupper[4][4];
     ComputeMetricAndInverse(x1v, x2v, x3v, flat, spin, glower, gupper);
 
+    // conserved variables are densitized by sqrt(-g) (identically 1 in Kerr-Schild)
+    Real sqrt_mg = SqrtMinusDetMetric(glower, gupper);
+    u.d  /= sqrt_mg;
+    u.mx /= sqrt_mg;
+    u.my /= sqrt_mg;
+    u.mz /= sqrt_mg;
+    u.e  /= sqrt_mg;
+
     HydPrim1D w;
     bool dfloor_used=false, efloor_used=false;
     bool vceiling_used=false, c2p_failure=false;
@@ -169,16 +177,16 @@ void IdealGRHydro::ConsToPrim(DvceArray5D<Real> &cons, DvceArray5D<Real> &prim,
       // reset conserved variables if floor, ceiling, failure, or excision encountered
       if (dfloor_used || efloor_used || vceiling_used || c2p_failure || excised) {
         SingleP2C_IdealGRHyd(glower, gupper, w, eos.gamma, u);
-        cons(m,IDN,k,j,i) = u.d;
-        cons(m,IM1,k,j,i) = u.mx;
-        cons(m,IM2,k,j,i) = u.my;
-        cons(m,IM3,k,j,i) = u.mz;
-        cons(m,IEN,k,j,i) = u.e;
+        cons(m,IDN,k,j,i) = sqrt_mg*u.d;
+        cons(m,IM1,k,j,i) = sqrt_mg*u.mx;
+        cons(m,IM2,k,j,i) = sqrt_mg*u.my;
+        cons(m,IM3,k,j,i) = sqrt_mg*u.mz;
+        cons(m,IEN,k,j,i) = sqrt_mg*u.e;
       }
 
       // convert scalars (if any)
       for (int n=nhyd; n<(nhyd+nscal); ++n) {
-        prim(m,n,k,j,i) = cons(m,n,k,j,i)/u.d;
+        prim(m,n,k,j,i) = cons(m,n,k,j,i)/(sqrt_mg*u.d);
       }
     }
   }, Kokkos::Sum<int>(nfloord_), Kokkos::Sum<int>(nfloore_), Kokkos::Sum<int>(nceilv_),
@@ -246,16 +254,17 @@ void IdealGRHydro::PrimToCons(const DvceArray5D<Real> &prim, DvceArray5D<Real> &
     HydCons1D u;
     SingleP2C_IdealGRHyd(glower, gupper, w, gamma, u);
 
-    // Set conserved quantities
-    cons(m,IDN,k,j,i) = u.d;
-    cons(m,IM1,k,j,i) = u.mx;
-    cons(m,IM2,k,j,i) = u.my;
-    cons(m,IM3,k,j,i) = u.mz;
-    cons(m,IEN,k,j,i) = u.e;
+    // Set conserved quantities, densitized by sqrt(-g) (identically 1 in Kerr-Schild)
+    Real sqrt_mg = SqrtMinusDetMetric(glower, gupper);
+    cons(m,IDN,k,j,i) = sqrt_mg*u.d;
+    cons(m,IM1,k,j,i) = sqrt_mg*u.mx;
+    cons(m,IM2,k,j,i) = sqrt_mg*u.my;
+    cons(m,IM3,k,j,i) = sqrt_mg*u.mz;
+    cons(m,IEN,k,j,i) = sqrt_mg*u.e;
 
     // convert scalars (if any)
     for (int n=nhyd; n<(nhyd+nscal); ++n) {
-      cons(m,n,k,j,i) = u.d*prim(m,n,k,j,i);
+      cons(m,n,k,j,i) = (sqrt_mg*u.d)*prim(m,n,k,j,i);
     }
   });
 

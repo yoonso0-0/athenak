@@ -247,6 +247,8 @@ void SingleP2C_IdealSRHyd(const HydPrim1D &w, const Real gam, HydCons1D &u) {
 //! \brief Converts single state of conserved variables in GR hydro into conserved
 //! variables for special relativistic hydrodynamics with an ideal gas EOS. This allows
 //! the ConsToPrim() function in GR Hydro to use SinceP2C_IdealSrHyd() function.
+//! The input state must not be densitized: callers divide the evolved variables by
+//! sqrt(-g) first (see SqrtMinusDetMetric() in cartesian_ks.hpp).
 
 KOKKOS_INLINE_FUNCTION
 void TransformToSRHyd(const HydCons1D &u, Real glower[][4], Real gupper[][4],

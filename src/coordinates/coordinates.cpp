@@ -167,6 +167,8 @@ void Coordinates::CoordSrcTerms(const DvceArray5D<Real> &prim, const EOS_Data &e
 
     Real glower[4][4], gupper[4][4];
     ComputeMetricAndInverse(x1v, x2v, x3v, flat, spin, glower, gupper);
+    // conserved variables are densitized by sqrt(-g) (identically 1 in Kerr-Schild)
+    Real sqrt_mg = SqrtMinusDetMetric(glower, gupper);
 
     // Extract primitives
     const Real &rho  = prim(m,IDN,k,j,i);
@@ -241,9 +243,9 @@ void Coordinates::CoordSrcTerms(const DvceArray5D<Real> &prim, const EOS_Data &e
     s_3 += 0.5*dg_dx3[3][3] * tt[3][3];
 
     // Add source terms to conserved quantities
-    cons(m,IM1,k,j,i) += dt * s_1;
-    cons(m,IM2,k,j,i) += dt * s_2;
-    cons(m,IM3,k,j,i) += dt * s_3;
+    cons(m,IM1,k,j,i) += dt * (sqrt_mg*s_1);
+    cons(m,IM2,k,j,i) += dt * (sqrt_mg*s_2);
+    cons(m,IM3,k,j,i) += dt * (sqrt_mg*s_3);
   });
 
   return;
