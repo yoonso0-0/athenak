@@ -16,6 +16,8 @@
 //!   - temperature: flat T_shell (see DebrisTemperature)
 //!   - background:  at rest on the <hydro> floors wherever the debris
 //!                  profile is at or below dfloor (r >= r_dfloor)
+//!   - tracer:      with <hydro>/nscalars >= 1, the first passive scalar is 1
+//!                  in the debris and 0 in the background; others are 0
 //!
 //! Flux diagnostics (<problem>/user_hist = true):
 //!   - one history file <basename>.user.flux<n>.hst per surface: flux0 on the
@@ -467,6 +469,7 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
           eint = efloor;
         }
         Real uu1 = 0.0, uu2 = 0.0, uu3 = 0.0;
+        Real tracer = 0.0; // debris tag, first passive scalar
 
         // Debris, with dx = x - x_coll and r = |dx| (coordinate distance):
         //   density   rho_debris = rho_core                     r <  r_break
@@ -486,6 +489,7 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
         }
         if (!is_excised && rho_debris > eos.dfloor) {
           rho = rho_debris;
+          tracer = 1.0;
           // eint = p / (gamma - 1), no lower than efloor.
           const Real temp_k = DebrisTemperature(r, r_break, t_shell);
           eint = fmax(efloor, rho * temp_k * debris.kelvin_to_code / gm1);
@@ -517,7 +521,7 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
         w0(m, IVY, k, j, i) = uu2;
         w0(m, IVZ, k, j, i) = uu3;
         for (int n = nhydro; n < nvars; ++n) {
-          w0(m, n, k, j, i) = 0.0;
+          w0(m, n, k, j, i) = (n == nhydro) ? tracer : 0.0;
         }
       });
 
