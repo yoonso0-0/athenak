@@ -130,8 +130,8 @@ void SingleC2P_IdealSRMHD(MHDCons1D &u, const EOS_Data &eos, Real s2, Real b2, R
                           bool &c2p_failure, int &max_iter) {
   // Parameters
   const Real udfloor = fmax(eos.dfloor, b2/eos.sigma_max); // floor on u.d
-  const int max_iterations = 25;
-  const Real tol = 1.0e-12;
+  const int max_iterations = eos.c2p_max_iter;
+  const Real tol = eos.c2p_tol;
   const Real gm1 = eos.gamma - 1.0;
 
   // apply density floor to u.d, without changing momentum or energy
