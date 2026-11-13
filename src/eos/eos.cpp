@@ -23,6 +23,8 @@ EquationOfState::EquationOfState(std::string bk, MeshBlockPack* pp, ParameterInp
   eos_data.pfloor = pin->GetOrAddReal(bk,"pfloor",(FLT_MIN));
   eos_data.tfloor = pin->GetOrAddReal(bk,"tfloor",(FLT_MIN));
   eos_data.sfloor = pin->GetOrAddReal(bk,"sfloor",(FLT_MIN));
+  eos_data.c2p_max_iter = pin->GetOrAddInteger(bk,"c2p_max_iter",25);
+  eos_data.c2p_tol = pin->GetOrAddReal(bk,"c2p_tol",1.0e-12);
 }
 
 //----------------------------------------------------------------------------------------

@@ -31,6 +31,8 @@ struct EOS_Data {
   Real dfloor, pfloor, tfloor, sfloor;  // density, pressure, temperature, entropy floors
   Real gamma_max;    // ceiling on Lorentz factor in SR/GR
   Real sigma_max;    // ceiling on magnetization in MHD
+  int c2p_max_iter;  // max iterations in relativistic C2P root find
+  Real c2p_tol;      // convergence tolerance in relativistic C2P root find
 
   // IDEAL GAS PRESSURE: converts primitive variable (either internal energy density e
   // or temperature e/d) into pressure.
