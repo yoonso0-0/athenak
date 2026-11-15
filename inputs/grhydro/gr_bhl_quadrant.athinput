@@ -1,0 +1,99 @@
+# Build with cmake -DPROBLEM=gr_bhl. Units: G = c = M_BH = 1.
+# The wind enters from +x1 and flows toward -x1.
+# Quadrant (y >= 0, z >= 0) with reflecting faces at y = 0 and z = 0. The y = 0
+# mirror plane requires a = 0. User histories are full-domain values
+# (symmetry_factor=4).
+
+<job>
+basename = gr_bhl
+
+<mesh>
+nghost = 4        # Even for SMR; PLM with FOFC requires at least 3
+nx1 = 32
+x1min = -32.0
+x1max = 32.0
+ix1_bc = user
+ox1_bc = user
+nx2 = 16
+x2min = 0.0
+x2max = 32.0
+ix2_bc = reflect
+ox2_bc = user
+nx3 = 16
+x3min = 0.0
+x3max = 32.0
+ix3_bc = reflect
+ox3_bc = user
+
+<meshblock>
+nx1 = 8
+nx2 = 8
+nx3 = 8
+
+<mesh_refinement>
+refinement = static
+
+<refined_region1>
+level = 3
+x1min = -0.1
+x1max = 0.1
+x2min = 0.0
+x2max = 0.1
+x3min = 0.0
+x3max = 0.1
+
+<time>
+evolution = dynamic
+integrator = rk2
+cfl_number = 0.3
+nlim = -1
+tlim = 1000.0
+ndiag = 100
+
+<coord>
+general_rel = true
+a = 0.0         # y = 0 is a mirror plane only without spin
+excise = true
+r_excise = 1.0
+flux_excise_r = 1.0
+dexcise = 1.0e-8
+pexcise = 3.33e-11
+
+<hydro>
+eos = ideal
+reconstruct = plm
+rsolver = hlle
+gamma = 1.3333333333333333
+dfloor = 1.0e-8
+pfloor = 3.33e-11
+gamma_max = 20.0
+fofc = true
+nscalars = 0
+
+<problem>
+rho_inf = 1.0
+v_inf = 0.2
+cs_inf = 0.05
+user_hist = true
+flux_nlev = 5
+flux_ninterp = -1
+flux_radii = 4, 8, 16, 24  # flux0 is always the outer horizon
+volume_radii = 4, 8, 16, 24
+# volume_rmin defaults to the outer horizon; volumes are cumulative shells.
+# volume_integral_rmax optionally caps all volume_radii.
+
+<output1>
+file_type = hst
+dt = 10.0
+user_hist_only = true
+
+<output2>
+file_type = bin
+variable = hydro_w
+slice_x3 = 0.0
+id = equator
+dt = 10.0
+
+<output3>
+file_type = rst
+dt = 100.0
