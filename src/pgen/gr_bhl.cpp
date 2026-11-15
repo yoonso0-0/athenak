@@ -23,11 +23,17 @@
 //!     T^t_i = int T^t_i d^3x.
 //! Angular sampling: flux_nlev (default 5); interpolation: flux_ninterp
 //! (default 2*nghost). sqrt(-g) = 1 in Cartesian KS.
+//!
+//! Symmetry: a reflecting face at z = 0 (any spin) or y = 0 (a = 0 only) is a
+//! mirror plane. Spheres sample mirror images, volume sums are scaled, and
+//! components odd under the reflection are zero, so all values are full-domain.
+//! The headers record symmetry_factor (2 or 4).
 
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -63,6 +69,9 @@ struct BhlParameters {
   Real rho_inf, eint_inf, uu_inf;
   Real volume_rmin;
   std::vector<Real> volume_radii;
+  // +1 (-1) if the mesh covers x_d >= 0 (<= 0) with a reflecting face at x_d = 0
+  int fold[3];
+  int symmetry_factor;
 };
 BhlParameters bhl;
 
@@ -178,12 +187,30 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
     std::vector<Real> flux_radii{horizon};
     const auto extra = ParseRadii("flux_radii", flux_list);
     flux_radii.insert(flux_radii.end(), extra.begin(), extra.end());
+    // Transverse mirror planes; the wind axis x is never one. Spheres may cross
+    // them, since points beyond are sampled at their mirror images.
     const auto &size = pmy_mesh_->mesh_size;
+    const Real lo[3] = {size.x1min, size.x2min, size.x3min};
+    const Real hi[3] = {size.x1max, size.x2max, size.x3max};
+    Real extent_xy = std::numeric_limits<Real>::max(), extent_z = extent_xy;
+    bhl.symmetry_factor = 1;
+    for (int d = 0; d < 3; ++d) {
+      const bool fold_lo = d > 0 && lo[d] == 0.0 &&
+                           pmy_mesh_->mesh_bcs[2 * d] == BoundaryFlag::reflect;
+      const bool fold_hi = d > 0 && hi[d] == 0.0 &&
+                           pmy_mesh_->mesh_bcs[2 * d + 1] == BoundaryFlag::reflect;
+      bhl.fold[d] = fold_lo ? 1 : (fold_hi ? -1 : 0);
+      bhl.symmetry_factor *= (bhl.fold[d] != 0) ? 2 : 1;
+      Real &extent = (d < 2) ? extent_xy : extent_z;
+      if (!fold_lo)
+        extent = std::min(extent, -lo[d]);
+      if (!fold_hi)
+        extent = std::min(extent, hi[d]);
+    }
     for (std::size_t n = 0; n < flux_radii.size(); ++n) {
       const Real radius = flux_radii[n];
-      if (std::hypot(radius, coord.bh_spin) >=
-              std::min({-size.x1min, size.x1max, -size.x2min, size.x2max}) ||
-          radius >= std::min(-size.x3min, size.x3max) || radius < horizon) {
+      if (std::hypot(radius, coord.bh_spin) >= extent_xy ||
+          radius >= extent_z || radius < horizon) {
         Fatal("Flux spheres must lie at or outside the horizon and inside "
               "the full mesh.");
       }
@@ -194,6 +221,8 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
       }
       spherical_grids.push_back(
           std::make_unique<SphericalGrid>(pmbp, nlev, radius, ninterp));
+      if (bhl.symmetry_factor > 1)
+        spherical_grids.back()->FoldInterpolationCoordinates(bhl.fold);
       user_hist_tags.push_back("flux" + std::to_string(n));
     }
 
@@ -388,28 +417,38 @@ void SurfaceHistory(HistoryData *pdata, Mesh *pm) {
   const char *labels[] = {"mdot", "edot", "ldot", "Pdot_x", "Pdot_y", "Pdot_z"};
   for (int n = 0; n < pdata->nhist; ++n)
     pdata->label[n] = labels[n];
+  pdata->symmetry_factor = bhl.symmetry_factor;
   pdata->header_params = {{"radius", grid.radius},
                           {"nangles", static_cast<Real>(grid.nangles)},
                           {"flux_ninterp", static_cast<Real>(grid.ninterp)}};
 
   grid.InterpolateToSphere(phydro->nhydro, phydro->w0);
+  const Real r = grid.radius;
   for (int n = 0; n < grid.nangles; ++n) {
     const Real rho = grid.interp_vals.h_view(n, IDN);
     const Real eint = grid.interp_vals.h_view(n, IEN);
-    const Real x = grid.interp_coord.h_view(n, 0);
-    const Real y = grid.interp_coord.h_view(n, 1);
-    const Real z = grid.interp_coord.h_view(n, 2);
+    // A folded point was sampled at its mirror image: use the original
+    // position and flip the velocity normal to each mirror plane crossed.
+    const Real theta = grid.polar_pos.h_view(n, 0);
+    const Real phi = grid.polar_pos.h_view(n, 1);
+    const Real pos[3] = {(r * cos(phi) - spin * sin(phi)) * sin(theta),
+                         (r * sin(phi) + spin * cos(phi)) * sin(theta),
+                         r * cos(theta)};
+    const Real x = pos[0], y = pos[1], z = pos[2];
+    Real uu[3] = {grid.interp_vals.h_view(n, IVX),
+                  grid.interp_vals.h_view(n, IVY),
+                  grid.interp_vals.h_view(n, IVZ)};
+    for (int d = 1; d < 3; ++d) {
+      if (bhl.fold[d] * pos[d] < 0.0)
+        uu[d] = -uu[d];
+    }
     Real glower[4][4], gupper[4][4];
     ComputeMetricAndInverse(x, y, z, false, spin, glower, gupper);
-    const Real uu[3] = {grid.interp_vals.h_view(n, IVX),
-                        grid.interp_vals.h_view(n, IVY),
-                        grid.interp_vals.h_view(n, IVZ)};
     Real u[4], ucov[4];
     FourVelocity(glower, gupper, uu, u, ucov);
 
     // Project onto the spherical KS radial direction and apply the area
     // measure.
-    const Real r = grid.radius;
     const Real denom = 2.0 * SQR(r) - (SQR(x) + SQR(y) + SQR(z)) + SQR(spin);
     const Real dr[3] = {r * x / denom, r * y / denom,
                         (r + SQR(spin) / r) * z / denom};
@@ -443,6 +482,7 @@ void VolumeHistory(HistoryData *pdata, Mesh *pm, const int index) {
                           "Nw_z", "T^t_x", "T^t_y", "T^t_z"};
   for (int n = 0; n < pdata->nhist; ++n)
     pdata->label[n] = labels[n];
+  pdata->symmetry_factor = bhl.symmetry_factor;
   pdata->header_params = {{"rin", rmin}, {"rout", rmax}};
 
   using VolumeSum = array_sum::array_type<Real, 9>;
@@ -503,8 +543,13 @@ void VolumeHistory(HistoryData *pdata, Mesh *pm, const int index) {
         }
       },
       sum);
-  for (int n = 0; n < pdata->nhist; ++n)
-    pdata->hdata[n] = sum.the_array[n];
+  // Column n is the (n % 3) component: zero if odd under a mirror plane, else
+  // scaled to the full domain.
+  for (int n = 0; n < pdata->nhist; ++n) {
+    pdata->hdata[n] = (bhl.fold[n % 3] != 0)
+                          ? 0.0
+                          : bhl.symmetry_factor * sum.the_array[n];
+  }
 }
 
 //----------------------------------------------------------------------------------------
