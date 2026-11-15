@@ -5,7 +5,8 @@
 //========================================================================================
 //! \file gr_bhl.cpp
 //! \brief GR hydro BHL accretion onto a Kerr black hole in Cartesian KS
-//! coordinates (G = c = M = 1), with the wind entering at outer_x1.
+//! coordinates, or Cartesian harmonic coordinates if built with
+//! -DAthena_HARMONIC_KS=ON (G = c = M = 1), with the wind entering at outer_x1.
 //!
 //! <problem> parameters rho_inf, v_inf, cs_inf (relativistic sound speed) set
 //! the initial state and the outer_x1 ghost cells: rho = rho_inf and
@@ -16,13 +17,16 @@
 //!   flux0, flux1, ...: horizon, then flux_radii (default "12, 24").
 //!     mdot = -int rho*u^r dA, edot = int T^r_t dA, ldot = int T^r_phi dA,
 //!     Pdot_i = int T^r_i dA.
-//!   volume0, ...: volume_rmin (default horizon) < r_KS < volume_radii[n]
+//!   volume0, ...: volume_rmin (default horizon) < r_BL < volume_radii[n]
 //!     (default flux_radii, capped by volume_integral_rmax), active cells only.
-//!     Gr_i = int (T^{mu nu}/2) d_i g_{mu nu} d^3x (GR force on gas),
+//!     Gr_i = int sqrt(-g) (T^{mu nu}/2) d_i g_{mu nu} d^3x (GR force on gas),
 //!     Nw_i = int rho*x_i/|x|^3 d^3x (Newtonian force on hole),
-//!     T^t_i = int T^t_i d^3x.
+//!     T^t_i = int sqrt(-g) T^t_i d^3x.
 //! Angular sampling: flux_nlev (default 5); interpolation: flux_ninterp
-//! (default 2*nghost). sqrt(-g) = 1 in Cartesian KS.
+//! (default 2*nghost). All radii are Boyer-Lindquist radii r_BL. Surfaces of
+//! constant r_BL are spheroids of radius rs = r_BL - r_shift built like
+//! spherical KS ones from the Cartesian coordinates, with r_shift = 0 (KS) or
+//! M (harmonic). sqrt(-g) of the Cartesian coordinates is 1 in KS.
 //!
 //! Symmetry: a reflecting face at z = 0 (any spin) or y = 0 (a = 0 only) is a
 //! mirror plane. Spheres sample mirror images, volume sums are scaled, and
@@ -69,11 +73,20 @@ struct BhlParameters {
   Real rho_inf, eint_inf, uu_inf;
   Real volume_rmin;
   std::vector<Real> volume_radii;
-  // +1 (-1) if the mesh covers x_d >= 0 (<= 0) with a reflecting face at x_d = 0
+  // +1 (-1) if the mesh covers x_d >= 0 (<= 0) with a reflecting face at x_d =
+  // 0
   int fold[3];
   int symmetry_factor;
 };
 BhlParameters bhl;
+
+// Boyer-Lindquist radius minus the spheroidal radius of the Cartesian
+// coordinates.
+#if HARMONIC_KS_ENABLED
+constexpr Real kRShift = 1.0;
+#else
+constexpr Real kRShift = 0.0;
+#endif
 
 void BhlBoundary(Mesh *pm);
 void BhlHistory(HistoryData *pdata, Mesh *pm);
@@ -134,8 +147,8 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
   }
   const auto &coord = pmbp->pcoord->coord_data;
   const auto eos = pmbp->phydro->peos->eos_data;
-  if (!eos.is_ideal || !std::isfinite(eos.gamma) ||
-      eos.gamma <= 1.0 || eos.gamma > 2.0) {
+  if (!eos.is_ideal || !std::isfinite(eos.gamma) || eos.gamma <= 1.0 ||
+      eos.gamma > 2.0) {
     Fatal("gr_bhl requires an ideal-gas internal-energy EOS with 1 < gamma <= "
           "2.");
   }
@@ -197,8 +210,9 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
     for (int d = 0; d < 3; ++d) {
       const bool fold_lo = d > 0 && lo[d] == 0.0 &&
                            pmy_mesh_->mesh_bcs[2 * d] == BoundaryFlag::reflect;
-      const bool fold_hi = d > 0 && hi[d] == 0.0 &&
-                           pmy_mesh_->mesh_bcs[2 * d + 1] == BoundaryFlag::reflect;
+      const bool fold_hi =
+          d > 0 && hi[d] == 0.0 &&
+          pmy_mesh_->mesh_bcs[2 * d + 1] == BoundaryFlag::reflect;
       bhl.fold[d] = fold_lo ? 1 : (fold_hi ? -1 : 0);
       bhl.symmetry_factor *= (bhl.fold[d] != 0) ? 2 : 1;
       Real &extent = (d < 2) ? extent_xy : extent_z;
@@ -208,9 +222,9 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
         extent = std::min(extent, hi[d]);
     }
     for (std::size_t n = 0; n < flux_radii.size(); ++n) {
-      const Real radius = flux_radii[n];
-      if (std::hypot(radius, coord.bh_spin) >= extent_xy ||
-          radius >= extent_z || radius < horizon) {
+      const Real radius = flux_radii[n], rs = radius - kRShift;
+      if (std::hypot(rs, coord.bh_spin) >= extent_xy || rs >= extent_z ||
+          radius < horizon) {
         Fatal("Flux spheres must lie at or outside the horizon and inside "
               "the full mesh.");
       }
@@ -220,7 +234,7 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
               "(flux0).");
       }
       spherical_grids.push_back(
-          std::make_unique<SphericalGrid>(pmbp, nlev, radius, ninterp));
+          std::make_unique<SphericalGrid>(pmbp, nlev, rs, ninterp));
       if (bhl.symmetry_factor > 1)
         spherical_grids.back()->FoldInterpolationCoordinates(bhl.fold);
       user_hist_tags.push_back("flux" + std::to_string(n));
@@ -372,8 +386,8 @@ void BhlBoundary(Mesh *pm) {
             w0(m, n, k, j, i) = value;
           }
 
-          // Conserved variables must use the metric at the destination ghost
-          // cell.
+          // Densitized conserved variables must use the metric at the
+          // destination ghost cell.
           const Real x =
               CellCenterX(i - indcs.is, indcs.nx1, size.d_view(m).x1min,
                           size.d_view(m).x1max);
@@ -394,13 +408,14 @@ void BhlBoundary(Mesh *pm) {
           w.vz = w0(m, IVZ, k, j, i);
           HydCons1D u;
           SingleP2C_IdealGRHyd(glower, gupper, w, gamma, u);
-          u0(m, IDN, k, j, i) = u.d;
-          u0(m, IEN, k, j, i) = u.e;
-          u0(m, IM1, k, j, i) = u.mx;
-          u0(m, IM2, k, j, i) = u.my;
-          u0(m, IM3, k, j, i) = u.mz;
+          const Real sqrt_mg = SqrtMinusDetMetric(glower, gupper);
+          u0(m, IDN, k, j, i) = sqrt_mg * u.d;
+          u0(m, IEN, k, j, i) = sqrt_mg * u.e;
+          u0(m, IM1, k, j, i) = sqrt_mg * u.mx;
+          u0(m, IM2, k, j, i) = sqrt_mg * u.my;
+          u0(m, IM3, k, j, i) = sqrt_mg * u.mz;
           for (int n = nhydro; n < nvars; ++n)
-            u0(m, n, k, j, i) = u.d * w0(m, n, k, j, i);
+            u0(m, n, k, j, i) = sqrt_mg * u.d * w0(m, n, k, j, i);
         });
   }
 }
@@ -418,12 +433,12 @@ void SurfaceHistory(HistoryData *pdata, Mesh *pm) {
   for (int n = 0; n < pdata->nhist; ++n)
     pdata->label[n] = labels[n];
   pdata->symmetry_factor = bhl.symmetry_factor;
-  pdata->header_params = {{"radius", grid.radius},
+  pdata->header_params = {{"radius", grid.radius + kRShift},
                           {"nangles", static_cast<Real>(grid.nangles)},
                           {"flux_ninterp", static_cast<Real>(grid.ninterp)}};
 
   grid.InterpolateToSphere(phydro->nhydro, phydro->w0);
-  const Real r = grid.radius;
+  const Real r = grid.radius; // spheroidal radius rs
   for (int n = 0; n < grid.nangles; ++n) {
     const Real rho = grid.interp_vals.h_view(n, IDN);
     const Real eint = grid.interp_vals.h_view(n, IEN);
@@ -447,13 +462,15 @@ void SurfaceHistory(HistoryData *pdata, Mesh *pm) {
     Real u[4], ucov[4];
     FourVelocity(glower, gupper, uu, u, ucov);
 
-    // Project onto the spherical KS radial direction and apply the area
-    // measure.
+    // Project onto the radial direction (dr_BL = drs) and apply the area
+    // element sqrt(-g) (rs^2 + a^2 cos^2 theta) dOmega, where the second factor
+    // is the Jacobian from Cartesian to spheroidal coordinates.
     const Real denom = 2.0 * SQR(r) - (SQR(x) + SQR(y) + SQR(z)) + SQR(spin);
     const Real dr[3] = {r * x / denom, r * y / denom,
                         (r + SQR(spin) / r) * z / denom};
     const Real ur = dr[0] * u[1] + dr[1] * u[2] + dr[2] * u[3];
-    const Real area = (SQR(r) + SQR(spin * cos(grid.polar_pos.h_view(n, 0)))) *
+    const Real area = SqrtMinusDetMetric(glower, gupper) *
+                      (SQR(r) + SQR(spin * cos(theta))) *
                       grid.solid_angles.h_view(n);
     const Real enthalpy = rho + gamma * eint;
 
@@ -504,11 +521,8 @@ void VolumeHistory(HistoryData *pdata, Mesh *pm, const int index) {
                                    size.d_view(m).x2min, size.d_view(m).x2max);
         const Real z = CellCenterX(k - indcs.ks, indcs.nx3,
                                    size.d_view(m).x3min, size.d_view(m).x3max);
-        const Real rad2 = SQR(x) + SQR(y) + SQR(z);
-        const Real rks2 =
-            0.5 * (rad2 - SQR(spin) +
-                   sqrt(SQR(rad2 - SQR(spin)) + 4.0 * SQR(spin * z)));
-        if (rks2 <= SQR(rmin) || rks2 >= SQR(rmax))
+        const Real r_bl = BoyerLindquistRadius(x, y, z, false, spin);
+        if (r_bl <= rmin || r_bl >= rmax)
           return;
 
         Real glower[4][4], gupper[4][4];
@@ -524,6 +538,8 @@ void VolumeHistory(HistoryData *pdata, Mesh *pm, const int index) {
         ComputeMetricDerivatives(x, y, z, false, spin, dg[0], dg[1], dg[2]);
         const Real vol =
             size.d_view(m).dx1 * size.d_view(m).dx2 * size.d_view(m).dx3;
+        const Real sqrt_mg = SqrtMinusDetMetric(glower, gupper);
+        const Real rad2 = SQR(x) + SQR(y) + SQR(z);
         const Real pos[3] = {x, y, z};
         for (int d = 0; d < 3; ++d) {
           Real source = 0.0;
@@ -537,18 +553,18 @@ void VolumeHistory(HistoryData *pdata, Mesh *pm, const int index) {
               source += (mu == nu ? 0.5 : 1.0) * dg[d][mu][nu] * stress;
             }
           }
-          accum.the_array[d] += vol * source;
+          accum.the_array[d] += vol * sqrt_mg * source;
           accum.the_array[3 + d] += vol * rho * pos[d] / (rad2 * sqrt(rad2));
-          accum.the_array[6 + d] += vol * enthalpy * u[0] * ucov[d + 1];
+          accum.the_array[6 + d] +=
+              vol * sqrt_mg * enthalpy * u[0] * ucov[d + 1];
         }
       },
       sum);
   // Column n is the (n % 3) component: zero if odd under a mirror plane, else
   // scaled to the full domain.
   for (int n = 0; n < pdata->nhist; ++n) {
-    pdata->hdata[n] = (bhl.fold[n % 3] != 0)
-                          ? 0.0
-                          : bhl.symmetry_factor * sum.the_array[n];
+    pdata->hdata[n] =
+        (bhl.fold[n % 3] != 0) ? 0.0 : bhl.symmetry_factor * sum.the_array[n];
   }
 }
 
