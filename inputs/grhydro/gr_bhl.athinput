@@ -51,8 +51,7 @@ ndiag = 100
 general_rel = true
 a = 0.5
 excise = true
-r_excise = 1.0
-flux_excise_r = 1.0
+# r_excise and flux_excise_r default to r_BL = M (KS) or M + sqrt(M^2-a^2)/2 (harmonic)
 dexcise = 1.0e-8
 pexcise = 3.33e-11
 
