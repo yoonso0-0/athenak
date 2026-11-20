@@ -247,6 +247,8 @@ void MeshRefinement::CheckForRefinement(MeshBlockPack* pmbp) {
   int nmb = pmbp->nmb_thispack;
   int mbs = pmy_mesh->gids_eachrank[global_variable::my_rank];
   for (int m=0; m<nmb; ++m) {
+    // clear "hold" flag set by criteria with a per-criterion level cap
+    if (refine_flag.h_view(m+mbs) == 2) {refine_flag.h_view(m+mbs) = 0;}
     if (pmy_mesh->lloc_eachmb[m+mbs].level == pmy_mesh->max_level) {
       if (refine_flag.h_view(m+mbs) > 0) {refine_flag.h_view(m+mbs) = 0;}
     }
