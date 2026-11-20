@@ -244,11 +244,12 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
     std::exit(EXIT_FAILURE);
   }
   const auto coord = pmbp->pcoord->coord_data;
-  if (coord.is_minkowski || !std::isfinite(coord.bh_spin) ||
-      std::abs(coord.bh_spin) > 1.0) {
+  // <coord>/minkowski = true (flat metric, spin 0, no excision) is allowed
+  // for testing.
+  if (!std::isfinite(coord.bh_spin) || std::abs(coord.bh_spin) > 1.0) {
     std::cerr << "### FATAL ERROR in " << __FILE__ << std::endl
-              << "collision_debris requires a Kerr metric with |a| <= 1."
-              << std::endl;
+              << "collision_debris requires a Kerr metric with |a| <= 1 "
+              << "or <coord>/minkowski = true." << std::endl;
     std::exit(EXIT_FAILURE);
   }
   auto *phydro = pmbp->phydro;
@@ -642,6 +643,7 @@ void NoInflowBoundary(Mesh *pm) {
 void AccretionFluxes(HistoryData *pdata, Mesh *pm) {
   auto *pmbp = pm->pmb_pack;
   auto *phydro = pmbp->phydro;
+  const bool minkowski = pmbp->pcoord->coord_data.is_minkowski;
   const Real spin = pmbp->pcoord->coord_data.bh_spin;
   const Real gamma = phydro->peos->eos_data.gamma;
   auto &grid = *pm->pgen->spherical_grids[pdata->user_index];
@@ -671,7 +673,7 @@ void AccretionFluxes(HistoryData *pdata, Mesh *pm) {
     const Real z_sample = grid.interp_coord.h_view(n, 2);
     const Real z = mirrored ? -z_sample : z_sample;
     Real glower[4][4], gupper[4][4];
-    ComputeMetricAndInverse(x, y, z, false, spin, glower, gupper);
+    ComputeMetricAndInverse(x, y, z, minkowski, spin, glower, gupper);
 
     const Real rho = grid.interp_vals.h_view(n, IDN);
     const Real eint = grid.interp_vals.h_view(n, IEN);
