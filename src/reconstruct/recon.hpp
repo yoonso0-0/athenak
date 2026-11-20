@@ -12,6 +12,8 @@
 //! (ivx = IVX|IVY|IVZ); the method is selected at runtime via a grid-uniform branch
 //! (coherent across threads, so effectively branch-free on GPU).
 
+#include <cfloat>  // FLT_MIN
+
 #include "athena.hpp"
 #include "eos/eos.hpp"
 #include "plm.hpp"    // PLM()
@@ -20,39 +22,19 @@
 #include "teno.hpp"  // TENO()
 
 //----------------------------------------------------------------------------------------
-//! \fn ReconCellT<recon,ivx>()
-//! \brief Single-variable, single-cell reconstruction with the method selected at
-//! COMPILE TIME.  Reads the stencil of variable `n` centered on cell (m,k,j,i) in
-//! direction `ivx`, and writes ql to face (i+1) and qr to face (i) in the global
-//! per-face buffers.  Buffers are indexed by the GLOBAL cell/face index (m,n,k,j,i);
-//! they are sized to the full cell range (including ghosts) so any face touched by
-//! the reconstruction loop is in bounds (requires nghost >= 2).  The variable index
-//! `n` is supplied by the caller (it is a parallel index of the launching kernel), so
-//! this function handles exactly one variable.  Caller loops over the cells whose
-//! faces are needed (one extra cell on the normal axis):
-//!   ivx=IVX:  i in [is-1, ie+1], (transverse j,k over their active+ghost range)
-//!   ivx=IVY:  j in [js-1, je+1], (transverse i,k over their active+ghost range)
-//!   ivx=IVZ:  k in [ks-1, ke+1], (transverse i,j over their active+ghost range)
-//!
-//! The wide (+/-2) stencil used by PPM/WENOZ/TENO requires nghost >= 3 (enforced in the
-//! Hydro/MHD constructor); DC/PLM only touch the +/-1 stencil.  The method-dispatch is a
-//! constexpr-if on the template parameter, so no per-cell branch survives on the device.
+//! \fn ReconStencilT<recon,ivx>()
+//! \brief Reconstructs variable `n` of cell (m,k,j,i) in direction `ivx` with the method
+//! selected at COMPILE time, returning ql (right-face value) and qr (left-face value).
+//! No floors are applied here.
 template <ReconstructionMethod recon, int ivx>
 KOKKOS_INLINE_FUNCTION
-void ReconCellT(const EOS_Data &eos, const bool apply_floors,
-                const int m, const int n, const int k, const int j, const int i,
-                const DvceArray5D<Real> &q,
-                const DvceArray5D<Real> &wl,
-                const DvceArray5D<Real> &wr) {
+void ReconStencilT(const int m, const int n, const int k, const int j, const int i,
+                   const DvceArray5D<Real> &q, Real &ql_val, Real &qr_val) {
   // Compile-time stencil offsets along the reconstruction direction
   constexpr int di = (ivx == IVX) ? 1 : 0;
   constexpr int dj = (ivx == IVY) ? 1 : 0;
   constexpr int dk = (ivx == IVZ) ? 1 : 0;
 
-  const Real dfloor = eos.dfloor;
-  const Real efloor = eos.is_ideal ? (eos.pfloor/(eos.gamma - 1.0)) : 0.0;
-
-  Real ql_val, qr_val;
   if constexpr (recon == ReconstructionMethod::dc) {
     ql_val = q(m, n, k, j, i);
     qr_val = q(m, n, k, j, i);
@@ -75,12 +57,6 @@ void ReconCellT(const EOS_Data &eos, const bool apply_floors,
          q(m, n, k +   dk, j +   dj, i +   di),
          q(m, n, k + 2*dk, j + 2*dj, i + 2*di),
          ql_val, qr_val);
-    if (apply_floors) {
-      if (n == IDN) { ql_val = fmax(ql_val, dfloor); qr_val = fmax(qr_val, dfloor); }
-      if (eos.is_ideal && n == IEN) {
-        ql_val = fmax(ql_val, efloor); qr_val = fmax(qr_val, efloor);
-      }
-    }
   } else if constexpr (recon == ReconstructionMethod::wenoz) {
     WENOZ(q(m, n, k - 2*dk, j - 2*dj, i - 2*di),
           q(m, n, k -   dk, j -   dj, i -   di),
@@ -88,12 +64,6 @@ void ReconCellT(const EOS_Data &eos, const bool apply_floors,
           q(m, n, k +   dk, j +   dj, i +   di),
           q(m, n, k + 2*dk, j + 2*dj, i + 2*di),
           ql_val, qr_val);
-    if (apply_floors) {
-      if (n == IDN) { ql_val = fmax(ql_val, dfloor); qr_val = fmax(qr_val, dfloor); }
-      if (eos.is_ideal && n == IEN) {
-        ql_val = fmax(ql_val, efloor); qr_val = fmax(qr_val, efloor);
-      }
-    }
   } else if constexpr (recon == ReconstructionMethod::teno) {
     TENO(q(m, n, k - 2*dk, j - 2*dj, i - 2*di),
           q(m, n, k -   dk, j -   dj, i -   di),
@@ -101,15 +71,69 @@ void ReconCellT(const EOS_Data &eos, const bool apply_floors,
           q(m, n, k +   dk, j +   dj, i +   di),
           q(m, n, k + 2*dk, j + 2*dj, i + 2*di),
           ql_val, qr_val);
-    if (apply_floors) {
-      if (n == IDN) { ql_val = fmax(ql_val, dfloor); qr_val = fmax(qr_val, dfloor); }
-      if (eos.is_ideal && n == IEN) {
-        ql_val = fmax(ql_val, efloor); qr_val = fmax(qr_val, efloor);
-      }
-    }
   } else {
     ql_val = q(m, n, k, j, i);
     qr_val = q(m, n, k, j, i);
+  }
+}
+
+//----------------------------------------------------------------------------------------
+//! \fn ReconCellT<recon,ivx>()
+//! \brief Single-variable, single-cell reconstruction with the method selected at
+//! COMPILE TIME.  Reads the stencil of variable `n` centered on cell (m,k,j,i) in
+//! direction `ivx`, and writes ql to face (i+1) and qr to face (i) in the global
+//! per-face buffers.  Buffers are indexed by the GLOBAL cell/face index (m,n,k,j,i);
+//! they are sized to the full cell range (including ghosts) so any face touched by
+//! the reconstruction loop is in bounds (requires nghost >= 2).  The variable index
+//! `n` is supplied by the caller (it is a parallel index of the launching kernel), so
+//! this function handles exactly one variable.  Caller loops over the cells whose
+//! faces are needed (one extra cell on the normal axis):
+//!   ivx=IVX:  i in [is-1, ie+1], (transverse j,k over their active+ghost range)
+//!   ivx=IVY:  j in [js-1, je+1], (transverse i,k over their active+ghost range)
+//!   ivx=IVZ:  k in [ks-1, ke+1], (transverse i,j over their active+ghost range)
+//!
+//! The wide (+/-2) stencil used by PPM/WENOZ/TENO requires nghost >= 3 (enforced in the
+//! Hydro/MHD constructor); DC/PLM only touch the +/-1 stencil.  The method-dispatch is a
+//! constexpr-if on the template parameter, so no per-cell branch survives on the device.
+//!
+//! For PPMX/WENOZ/TENO with `apply_floors`, face values of density and (ideal gas)
+//! internal energy density are floored.  The internal energy floor is
+//! max(pfloor, d*tfloor)/(gamma-1) at the face density d; when tfloor is set, the
+//! thread reconstructing IEN also reconstructs IDN to obtain d (variables are
+//! reconstructed in separate threads).
+template <ReconstructionMethod recon, int ivx>
+KOKKOS_INLINE_FUNCTION
+void ReconCellT(const EOS_Data &eos, const bool apply_floors,
+                const int m, const int n, const int k, const int j, const int i,
+                const DvceArray5D<Real> &q,
+                const DvceArray5D<Real> &wl,
+                const DvceArray5D<Real> &wr) {
+  // Compile-time stencil offsets along the reconstruction direction
+  constexpr int di = (ivx == IVX) ? 1 : 0;
+  constexpr int dj = (ivx == IVY) ? 1 : 0;
+  constexpr int dk = (ivx == IVZ) ? 1 : 0;
+
+  Real ql_val, qr_val;
+  ReconStencilT<recon, ivx>(m, n, k, j, i, q, ql_val, qr_val);
+
+  if constexpr (recon == ReconstructionMethod::ppmx ||
+                recon == ReconstructionMethod::wenoz ||
+                recon == ReconstructionMethod::teno) {
+    if (apply_floors) {
+      const Real dfloor = eos.dfloor;
+      if (n == IDN) { ql_val = fmax(ql_val, dfloor); qr_val = fmax(qr_val, dfloor); }
+      if (eos.is_ideal && n == IEN) {
+        Real efloor_l = eos.pfloor/(eos.gamma - 1.0);
+        Real efloor_r = efloor_l;
+        if (eos.tfloor > (FLT_MIN)) {  // temperature floor set: needs face density
+          Real dl, dr;
+          ReconStencilT<recon, ivx>(m, IDN, k, j, i, q, dl, dr);
+          efloor_l = eos.IdealEintFloor(fmax(dl, dfloor));
+          efloor_r = eos.IdealEintFloor(fmax(dr, dfloor));
+        }
+        ql_val = fmax(ql_val, efloor_l); qr_val = fmax(qr_val, efloor_r);
+      }
+    }
   }
   // ql is the right-face value of cell (writes the LEFT state of face i+1);
   // qr is the left-face value of cell (writes the RIGHT state of face i).

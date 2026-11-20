@@ -41,6 +41,13 @@ struct EOS_Data {
     return ((gamma-1.0)*eint);
   }
 
+  // IDEAL GAS: floor on internal energy density at density d, the larger of the pressure
+  // floor and the temperature floor (T = p/d), i.e. max(pfloor, d*tfloor)/(gamma-1)
+  KOKKOS_INLINE_FUNCTION
+  Real IdealEintFloor(const Real d) const {
+    return fmax(pfloor, d*tfloor)/(gamma-1.0);
+  }
+
   // NON-RELATIVISTIC IDEAL GAS HYDRO: inlined sound speed function
   KOKKOS_INLINE_FUNCTION
   Real IdealHydroSoundSpeed(const Real d, const Real p) const {

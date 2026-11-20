@@ -18,6 +18,8 @@
 //!                  no lower than 1e3 K (see DebrisTemperature)
 //!   - background:  at rest on the <hydro> floors wherever the debris
 //!                  profile is at or below dfloor (r >= r_dfloor)
+//!   - tfloor_kelvin (optional): temperature floor in K, T = p mu m_u/(rho k_B);
+//!                  overrides <hydro>/tfloor
 //!   - tracer:      with <hydro>/nscalars >= 1, the first passive scalar is 1
 //!                  in the debris and 0 in the background; others are 0
 //!
@@ -128,6 +130,13 @@ struct DebrisParameters {
   Real kelvin_to_code;
 };
 
+// Code temperature T = p/rho per kelvin: k_B / (mu m_u c^2).
+Real KelvinToCode(const Real mu) {
+  using units::Units;
+  return Units::k_boltzmann_cgs /
+         (mu * Units::atomic_mass_unit_cgs * SQR(Units::speed_of_light_cgs));
+}
+
 DebrisParameters ReadDebrisParameters(ParameterInput *pin) {
   using units::Units;
   DebrisParameters debris{};
@@ -197,9 +206,7 @@ DebrisParameters ReadDebrisParameters(ParameterInput *pin) {
   if (!std::isfinite(debris.mu) || debris.mu <= 0.0) {
     Fatal("<problem>/mu must be positive and finite.");
   }
-  debris.kelvin_to_code =
-      Units::k_boltzmann_cgs / (debris.mu * Units::atomic_mass_unit_cgs *
-                                SQR(Units::speed_of_light_cgs));
+  debris.kelvin_to_code = KelvinToCode(debris.mu);
   return debris;
 }
 
@@ -253,6 +260,13 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
     std::exit(EXIT_FAILURE);
   }
   auto *phydro = pmbp->phydro;
+  // Optional temperature floor in kelvin, converted with <problem>/mu; overrides
+  // <hydro>/tfloor. Set on restarts too, since the EOS floors are re-read from input.
+  if (pin->DoesParameterExist("problem", "tfloor_kelvin")) {
+    const Real mu = pin->GetOrAddReal("problem", "mu", 0.6);
+    phydro->peos->eos_data.tfloor =
+        pin->GetReal("problem", "tfloor_kelvin") * KelvinToCode(mu);
+  }
   const auto eos = phydro->peos->eos_data;
   if (!eos.is_ideal || !std::isfinite(eos.gamma) || eos.gamma <= 1.0) {
     std::cerr << "### FATAL ERROR in " << __FILE__ << std::endl
@@ -353,11 +367,13 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
   // Startup report (rank 0):
   //   - inputs and derived debris scales
   //   - at r_dfloor, the debris temperature next to the temperature the
-  //     <hydro> floors imply, T_floor = (pfloor / dfloor) / kelvin_to_code
+  //     <hydro> floors imply at dfloor,
+  //     T_floor = max(pfloor / dfloor, tfloor) / kelvin_to_code
   //   - a fatal error if r_dfloor < r_peak, else a warning if
   //     r_coll < r_dfloor
   if (global_variable::my_rank == 0) {
-    const Real t_floor = eos.pfloor / (eos.dfloor * debris.kelvin_to_code);
+    const Real t_floor =
+        fmax(eos.pfloor / eos.dfloor, eos.tfloor) / debris.kelvin_to_code;
     std::ostringstream msg;
     msg << std::scientific << std::setprecision(4);
     // One "label  value  unit" row with aligned columns.
@@ -406,6 +422,7 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
     section("<hydro> floors:");
     row("dfloor", eos.dfloor, "");
     row("pfloor", eos.pfloor, "");
+    row("tfloor", eos.tfloor, "");
     if (rho_core > eos.dfloor) {
       const Real t_debris = DebrisTemperature(r_dfloor, r_break_T, t_in, t_out);
       section("Where the debris density falls to dfloor:");
@@ -414,12 +431,14 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
       row("  in units of r_peak", r_dfloor / r_peak, "");
       row("|x_coll| / r_dfloor", r_coll / r_dfloor, "");
       row("debris temperature T_debris", t_debris, "K");
-      row("floor temperature T_floor", t_floor, "K  (pfloor/dfloor)");
+      row("floor temperature T_floor", t_floor,
+          "K  (max(pfloor/dfloor, tfloor))");
       row("T_floor / T_debris", t_floor / t_debris, "");
     } else {
       section("rho_core <= dfloor: the debris lies entirely on the density "
               "floor.");
-      row("floor temperature T_floor", t_floor, "K  (pfloor/dfloor)");
+      row("floor temperature T_floor", t_floor,
+          "K  (max(pfloor/dfloor, tfloor))");
     }
     msg << std::fixed << std::setprecision(2)
         << "  (T = p mu m_u / (rho k_B), mu = " << debris.mu << ")" << std::endl
@@ -466,8 +485,6 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
   const int nhydro = phydro->nhydro;
   const int nvars = nhydro + phydro->nscalars;
   const Real gm1 = eos.gamma - 1.0;
-  // Internal energy density floor, as in reconstruct/recon.hpp.
-  const Real efloor = eos.pfloor / gm1;
   const auto &size = pmbp->pmb->mb_size;
   const auto &excised = pmbp->pcoord->excision_floor;
   auto &w0 = phydro->w0;
@@ -491,7 +508,9 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
           eint = coord.pexcise / gm1;
         } else {
           rho = eos.dfloor;
-          eint = efloor;
+          // internal energy floor max(pfloor, rho*tfloor)/(gamma-1), as in the
+          // EOS and reconstruction
+          eint = eos.IdealEintFloor(rho);
         }
         Real uu1 = 0.0, uu2 = 0.0, uu3 = 0.0;
         Real tracer = 0.0; // debris tag, first passive scalar
@@ -516,9 +535,10 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
         if (!is_excised && rho_debris > eos.dfloor) {
           rho = rho_debris;
           tracer = 1.0;
-          // eint = p / (gamma - 1), no lower than efloor.
+          // eint = p / (gamma - 1), no lower than the internal energy floor.
           const Real temp_k = DebrisTemperature(r, r_break_T, t_in, t_out);
-          eint = fmax(efloor, rho * temp_k * debris.kelvin_to_code / gm1);
+          eint = fmax(eos.IdealEintFloor(rho),
+                      rho * temp_k * debris.kelvin_to_code / gm1);
           // v^i is the normal-observer 3-velocity; the two terms add
           // linearly since both are << c. The primitive is u^i = W v^i with
           // W = 1 / sqrt(1 - gamma_ij v^i v^j).
