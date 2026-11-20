@@ -46,6 +46,7 @@ struct RefCritData {
   Real rvalue_min, rvalue_max;     // min/max criteria for refinement
   Real rloc_x1, rloc_x2, rloc_x3;  // x1-,x2-,x3-locations of point to refine around
   Real rloc_rad;                   // radius of region around point to be refined
+  int rnum_levels;                 // max # levels (incl. root) this criterion refines to
   DvceArray5DnSlice rdata;         // slice of variable "n" in 5D array(m,n,k,j,i)
 };
 
@@ -75,5 +76,9 @@ class RefinementCriteria {
   // data
   Mesh *pmy_mesh;
   DvceArray5D<Real> dvars;  // derived variables
+  DualArray1D<int> mblev;   // logical level of each MeshBlock in pack
+
+  // functions
+  bool LoadLevels(MeshBlockPack* pmbp, const RefCritData &crit, int &cap);
 };
 #endif // MESH_REFINEMENT_CRITERIA_HPP_

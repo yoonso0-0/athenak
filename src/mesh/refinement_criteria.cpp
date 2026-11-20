@@ -29,7 +29,9 @@ RefinementCriteria::RefinementCriteria(Mesh *pm, ParameterInput *pin) :
     ncriteria(0),
     nderived(0),
     pmy_mesh(pm),
-    dvars("derived_ref_vars",1,1,1,1,1) {
+    dvars("derived_ref_vars",1,1,1,1,1),
+    mblev("mblev",1) {
+  int global_nlev = pin->GetOrAddInteger("mesh_refinement", "num_levels", 1);
   // cycle through ParameterInput list and read each <amr_criterion> block
   for (auto it = pin->block.begin(); it != pin->block.end(); ++it) {
     if (it->block_name.compare(0, 13, "amr_criterion") == 0) {
@@ -62,6 +64,9 @@ RefinementCriteria::RefinementCriteria(Mesh *pm, ParameterInput *pin) :
       rcrit0.rloc_x2  = pin->GetOrAddReal(it->block_name,"location_x2", 0.0);
       rcrit0.rloc_x3  = pin->GetOrAddReal(it->block_name,"location_x3", 0.0);
       rcrit0.rloc_rad = pin->GetOrAddReal(it->block_name,"location_rad", 0.0);
+      // optional per-criterion cap on refinement level (same convention as
+      // <mesh_refinement>/num_levels); defaults to the global value
+      rcrit0.rnum_levels = pin->GetOrAddInteger(it->block_name,"num_levels",global_nlev);
       rcrit.emplace_back(rcrit0);
     }
   }
@@ -178,6 +183,31 @@ void RefinementCriteria::SetRefinementData(MeshBlockPack* pmbp, bool count_deriv
 }
 
 //----------------------------------------------------------------------------------------
+//! \fn bool RefinementCriteria::LoadLevels()
+//! \brief If this criterion caps refinement below the global max level, sets the absolute
+//! cap level and loads the logical level of each MeshBlock in the pack (host and device).
+//! Returns true if the cap is active.
+//! A MeshBlock at/above the cap that satisfies the criterion is flagged 2 ("hold"):
+//! later criteria cannot derefine it (they require flag==0), but can still refine it.
+//! Hold flags are reset to 0 in MeshRefinement::CheckForRefinement() after all criteria
+//! are applied, mirroring how uncapped criteria are held at the global max level.
+
+bool RefinementCriteria::LoadLevels(MeshBlockPack* pmbp, const RefCritData &crit,
+                                    int &cap) {
+  cap = pmy_mesh->root_level + crit.rnum_levels - 1;
+  if (cap >= pmy_mesh->max_level) {return false;}
+  int nmb = pmbp->nmb_thispack;
+  int mbs = pmy_mesh->gids_eachrank[global_variable::my_rank];
+  if (static_cast<int>(mblev.extent(0)) < nmb) {Kokkos::resize(mblev, nmb);}
+  for (int m=0; m<nmb; ++m) {
+    mblev.h_view(m) = pmy_mesh->lloc_eachmb[m+mbs].level;
+  }
+  mblev.template modify<HostMemSpace>();
+  mblev.template sync<DevExeSpace>();
+  return true;
+}
+
+//----------------------------------------------------------------------------------------
 //! \fn void RefinementCriteria::CheckMinMax()
 //! \brief Checks whether MeshBlock should be flagged for refinement/derefinement based on
 //! min/max of selected variable on device.  Variable is set in SetRefinementData().
@@ -197,6 +227,9 @@ void RefinementCriteria::CheckMinMax(MeshBlockPack* pmbp, RefCritData crit) {
 
   auto &valmax = crit.rvalue_max;
   auto &q0 = crit.rdata;
+  int cap;
+  bool capped = LoadLevels(pmbp, crit, cap);
+  auto lev = mblev.d_view;
   if (valmax < (FLT_MAX)) {  // user has set a max value to check
     par_for_outer("MaxRefCond",DevExeSpace(), 0, 0, 0, (nmb-1),
     KOKKOS_LAMBDA(TeamMember_t tmember, const int m) {
@@ -212,7 +245,9 @@ void RefinementCriteria::CheckMinMax(MeshBlockPack* pmbp, RefCritData crit) {
       },Kokkos::Max<Real>(team_qmax));
       // only derefine when flag has not been set by other criteria
       int &flag = refine_flag.d_view(m+mbs);
-      if  (team_qmax > valmax)                 {flag = 1;}
+      if (team_qmax > valmax) {
+        if (!(capped) || lev(m) < cap) {flag = 1;} else if (flag <= 0) {flag = 2;}
+      }
       if ((team_qmax < valmax) && (flag == 0)) {flag = -1;}
     });
   }
@@ -233,7 +268,9 @@ void RefinementCriteria::CheckMinMax(MeshBlockPack* pmbp, RefCritData crit) {
       },Kokkos::Min<Real>(team_qmin));
       // only derefine when flag has not been set by other criteria
       int &flag = refine_flag.d_view(m+mbs);
-      if  (team_qmin < valmin)                 {flag = 1;}
+      if (team_qmin < valmin) {
+        if (!(capped) || lev(m) < cap) {flag = 1;} else if (flag <= 0) {flag = 2;}
+      }
       if ((team_qmin > valmin) && (flag == 0)) {flag = -1;}
     });
   }
@@ -266,6 +303,9 @@ void RefinementCriteria::CheckSlope(MeshBlockPack* pmbp, RefCritData crit) {
 
   auto &valmax = crit.rvalue_max;
   auto &q0 = crit.rdata;
+  int cap;
+  bool capped = LoadLevels(pmbp, crit, cap);
+  auto lev = mblev.d_view;
   if (valmax < (FLT_MAX)) {  // user has set a max value to check
     par_for_outer("MaxRefCond",DevExeSpace(), 0, 0, 0, (nmb-1),
     KOKKOS_LAMBDA(TeamMember_t tmember, const int m) {
@@ -284,7 +324,9 @@ void RefinementCriteria::CheckSlope(MeshBlockPack* pmbp, RefCritData crit) {
       },Kokkos::Max<Real>(team_dqmax));
       // only derefine when flag has not been set by other criteria
       int &flag = refine_flag.d_view(m+mbs);
-      if  (team_dqmax > valmax)                 {flag = 1;}
+      if (team_dqmax > valmax) {
+        if (!(capped) || lev(m) < cap) {flag = 1;} else if (flag <= 0) {flag = 2;}
+      }
       if ((team_dqmax < valmax) && (flag == 0)) {flag = -1;}
     });
   }
@@ -317,6 +359,9 @@ void RefinementCriteria::CheckSecondDeriv(MeshBlockPack* pmbp, RefCritData crit)
 
   auto &valmax = crit.rvalue_max;
   auto &q0 = crit.rdata;
+  int cap;
+  bool capped = LoadLevels(pmbp, crit, cap);
+  auto lev = mblev.d_view;
   if (valmax < (FLT_MAX)) {  // user has set a max value to check
     par_for_outer("MaxRefCond",DevExeSpace(), 0, 0, 0, (nmb-1),
     KOKKOS_LAMBDA(TeamMember_t tmember, const int m) {
@@ -335,7 +380,9 @@ void RefinementCriteria::CheckSecondDeriv(MeshBlockPack* pmbp, RefCritData crit)
       },Kokkos::Max<Real>(team_d2qmax));
       // only derefine when flag has not been set by other criteria
       int &flag = refine_flag.d_view(m+mbs);
-      if  (team_d2qmax > valmax)                 {flag = 1;}
+      if (team_d2qmax > valmax) {
+        if (!(capped) || lev(m) < cap) {flag = 1;} else if (flag <= 0) {flag = 2;}
+      }
       if ((team_d2qmax < valmax) && (flag == 0)) {flag = -1;}
     });
   }
@@ -362,6 +409,8 @@ void RefinementCriteria::CheckLocation(MeshBlockPack* pmbp, RefCritData crit) {
   Real &x2 = crit.rloc_x2;
   Real &x3 = crit.rloc_x3;
   Real &rad = crit.rloc_rad;
+  int cap;
+  bool capped = LoadLevels(pmbp, crit, cap);
   for (int m = 0; m < nmb; ++m) {
     // extract MeshBlock bounds
     Real &x1min = size.h_view(m).x1min;
@@ -382,7 +431,12 @@ void RefinementCriteria::CheckLocation(MeshBlockPack* pmbp, RefCritData crit) {
             (((x3min < (x3+rad)) && (x3min > (x3-rad))) ||
              ((x3max < (x3+rad)) && (x3max > (x3-rad))) ||
              ((x3max > (x3+rad)) && (x3min < (x3-rad)))) ) {
-          refine_flag.h_view(m + mbs) = 1;
+          int &flag = refine_flag.h_view(m + mbs);
+          if (!(capped) || mblev.h_view(m) < cap) {
+            flag = 1;
+          } else if (flag <= 0) {
+            flag = 2;
+          }
         }
       }
     }
