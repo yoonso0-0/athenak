@@ -94,7 +94,8 @@ Real EquationC22(Real z, Real &u_d, Real q, Real r, EOS_Data eos) {
   Real const w = sqrt(1.0 + z*z);         // (C15)
   Real const wd = u_d/w;                  // (C15)
   Real eps = w*q - z*r + (z*z)/(1.0 + w); // (C16)
-  Real epsmin = fmax(eos.pfloor/(wd*gm1), eos.sfloor*pow(wd, gm1)/gm1);
+  Real epsmin = fmax(fmax(eos.pfloor/(wd*gm1), eos.tfloor/gm1),
+                     eos.sfloor*pow(wd, gm1)/gm1);
   eps = fmax(eps, epsmin);                // (C18)
   Real const h = 1.0 + eos.gamma*eps;     // (C1) & (C21)
   return (z - r/h); // (C22)
@@ -122,9 +123,11 @@ void SingleC2P_IdealSRHyd(HydCons1D &u, const EOS_Data &eos, const Real s2, HydP
     dfloor_used = true;
   }
 
-  // apply energy floor
-  if (u.e < eos.pfloor/gm1) {
-    u.e = eos.pfloor/gm1;
+  // apply energy floor, tau >= max(pfloor, D*tfloor)/(gamma-1).  With D = rho*W >= rho
+  // this never exceeds tau of the same flow at T = tfloor, so it adds no extra energy.
+  const Real efloor = eos.IdealEintFloor(u.d);
+  if (u.e < efloor) {
+    u.e = efloor;
     efloor_used = true;
   }
 
@@ -182,7 +185,7 @@ void SingleC2P_IdealSRHyd(HydCons1D &u, const EOS_Data &eos, const Real s2, HydP
   // of a C2P failure.
   if (iter_used==max_iterations) {
     w.d = eos.dfloor;
-    w.e = eos.pfloor/gm1;
+    w.e = eos.IdealEintFloor(eos.dfloor);
     w.vx = 0.0;
     w.vy = 0.0;
     w.vz = 0.0;
@@ -202,7 +205,8 @@ void SingleC2P_IdealSRHyd(HydCons1D &u, const EOS_Data &eos, const Real s2, HydP
 
   // compute specific internal energy density then apply floor
   Real eps = lor*q - z*r + (z*z)/(1.0 + lor);   // (C16)
-  Real epsmin = fmax(eos.pfloor/(dens*gm1), eos.sfloor*pow(dens, gm1)/gm1);
+  Real epsmin = fmax(fmax(eos.pfloor/(dens*gm1), eos.tfloor/gm1),
+                     eos.sfloor*pow(dens, gm1)/gm1);
   if (eps <= epsmin) {
     eps = epsmin;
     efloor_used = true;

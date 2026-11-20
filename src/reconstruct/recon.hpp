@@ -12,12 +12,65 @@
 //! (ivx = IVX|IVY|IVZ); the method is selected at runtime via a grid-uniform branch
 //! (coherent across threads, so effectively branch-free on GPU).
 
+#include <cfloat>  // FLT_MIN
+
 #include "athena.hpp"
 #include "eos/eos.hpp"
 #include "plm.hpp"    // PLM()
 #include "ppm.hpp"    // PPM4(), PPMX()
 #include "wenoz.hpp"  // WENOZ()
 #include "teno.hpp"  // TENO()
+
+//----------------------------------------------------------------------------------------
+//! \fn FloorEintFacesT<recon,ivx>()
+//! \brief Floors the (ideal gas) internal energy density face values ql, qr of cell
+//! (m,k,j,i), reconstructed with PPMX/WENOZ/TENO in direction `ivx`.  The floor is
+//! `efloor` = pfloor/(gamma-1) or, when the temperature floor is set,
+//! max(pfloor, d*tfloor)/(gamma-1) = IdealEintFloor(d) with d the face density.  Since
+//! each variable is reconstructed in its own thread, d is obtained by reconstructing IDN
+//! here with the same method, then floored at dfloor as in ReconCellT.
+template <ReconstructionMethod recon, int ivx>
+KOKKOS_INLINE_FUNCTION
+void FloorEintFacesT(const EOS_Data &eos, const Real efloor,
+                     const int m, const int k, const int j, const int i,
+                     const DvceArray5D<Real> &q, Real &ql_val, Real &qr_val) {
+  static_assert(recon == ReconstructionMethod::ppmx ||
+                recon == ReconstructionMethod::wenoz ||
+                recon == ReconstructionMethod::teno,
+                "FloorEintFacesT: only PPMX/WENOZ/TENO apply face floors");
+  Real efloor_l = efloor, efloor_r = efloor;
+  if (eos.tfloor > (FLT_MIN)) {  // temperature floor set: needs face density
+    constexpr int di = (ivx == IVX) ? 1 : 0;
+    constexpr int dj = (ivx == IVY) ? 1 : 0;
+    constexpr int dk = (ivx == IVZ) ? 1 : 0;
+    Real dl, dr;
+    if constexpr (recon == ReconstructionMethod::ppmx) {
+      PPMX(q(m, IDN, k - 2*dk, j - 2*dj, i - 2*di),
+           q(m, IDN, k -   dk, j -   dj, i -   di),
+           q(m, IDN, k,        j,        i),
+           q(m, IDN, k +   dk, j +   dj, i +   di),
+           q(m, IDN, k + 2*dk, j + 2*dj, i + 2*di),
+           dl, dr);
+    } else if constexpr (recon == ReconstructionMethod::wenoz) {
+      WENOZ(q(m, IDN, k - 2*dk, j - 2*dj, i - 2*di),
+            q(m, IDN, k -   dk, j -   dj, i -   di),
+            q(m, IDN, k,        j,        i),
+            q(m, IDN, k +   dk, j +   dj, i +   di),
+            q(m, IDN, k + 2*dk, j + 2*dj, i + 2*di),
+            dl, dr);
+    } else {
+      TENO(q(m, IDN, k - 2*dk, j - 2*dj, i - 2*di),
+           q(m, IDN, k -   dk, j -   dj, i -   di),
+           q(m, IDN, k,        j,        i),
+           q(m, IDN, k +   dk, j +   dj, i +   di),
+           q(m, IDN, k + 2*dk, j + 2*dj, i + 2*di),
+           dl, dr);
+    }
+    efloor_l = eos.IdealEintFloor(fmax(dl, eos.dfloor));
+    efloor_r = eos.IdealEintFloor(fmax(dr, eos.dfloor));
+  }
+  ql_val = fmax(ql_val, efloor_l); qr_val = fmax(qr_val, efloor_r);
+}
 
 //----------------------------------------------------------------------------------------
 //! \fn ReconCellT<recon,ivx>()
@@ -78,7 +131,7 @@ void ReconCellT(const EOS_Data &eos, const bool apply_floors,
     if (apply_floors) {
       if (n == IDN) { ql_val = fmax(ql_val, dfloor); qr_val = fmax(qr_val, dfloor); }
       if (eos.is_ideal && n == IEN) {
-        ql_val = fmax(ql_val, efloor); qr_val = fmax(qr_val, efloor);
+        FloorEintFacesT<recon, ivx>(eos, efloor, m, k, j, i, q, ql_val, qr_val);
       }
     }
   } else if constexpr (recon == ReconstructionMethod::wenoz) {
@@ -91,7 +144,7 @@ void ReconCellT(const EOS_Data &eos, const bool apply_floors,
     if (apply_floors) {
       if (n == IDN) { ql_val = fmax(ql_val, dfloor); qr_val = fmax(qr_val, dfloor); }
       if (eos.is_ideal && n == IEN) {
-        ql_val = fmax(ql_val, efloor); qr_val = fmax(qr_val, efloor);
+        FloorEintFacesT<recon, ivx>(eos, efloor, m, k, j, i, q, ql_val, qr_val);
       }
     }
   } else if constexpr (recon == ReconstructionMethod::teno) {
@@ -104,7 +157,7 @@ void ReconCellT(const EOS_Data &eos, const bool apply_floors,
     if (apply_floors) {
       if (n == IDN) { ql_val = fmax(ql_val, dfloor); qr_val = fmax(qr_val, dfloor); }
       if (eos.is_ideal && n == IEN) {
-        ql_val = fmax(ql_val, efloor); qr_val = fmax(qr_val, efloor);
+        FloorEintFacesT<recon, ivx>(eos, efloor, m, k, j, i, q, ql_val, qr_val);
       }
     }
   } else {
