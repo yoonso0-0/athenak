@@ -8,6 +8,8 @@
 //! throughout the code to a log file.  Checks whether there is data to be written
 //! every time step, but only writes data if one or more counters are non-zero
 
+#include <cinttypes>  // PRId64
+#include <cstdint>    // int64_t
 #include <cstdio>
 #include <cstdlib>
 #include <iomanip>
@@ -35,20 +37,20 @@ EventLogOutput::EventLogOutput(ParameterInput *pin, Mesh *pm, OutputParameters o
 void EventLogOutput::LoadOutputData(Mesh *pm) {
 #if MPI_PARALLEL_ENABLED
   // perform in-place sum or max over all MPI ranks, depending on counter
-  int* pdfloor = &(pm->ecounter.neos_dfloor);
-  int* pefloor = &(pm->ecounter.neos_efloor);
+  std::int64_t* pdfloor = &(pm->ecounter.neos_dfloor);
+  std::int64_t* pefloor = &(pm->ecounter.neos_efloor);
   int* ptfloor = &(pm->ecounter.neos_tfloor);
   int* pvceil  = &(pm->ecounter.neos_vceil);
   int* pfail   = &(pm->ecounter.neos_fail);
   int* pmaxit  = &(pm->ecounter.maxit_c2p);
-  int* pfofc   = &(pm->ecounter.nfofc);
-  MPI_Allreduce(MPI_IN_PLACE, pdfloor, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
-  MPI_Allreduce(MPI_IN_PLACE, pefloor, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+  std::int64_t* pfofc = &(pm->ecounter.nfofc);
+  MPI_Allreduce(MPI_IN_PLACE, pdfloor, 1, MPI_INT64_T, MPI_SUM, MPI_COMM_WORLD);
+  MPI_Allreduce(MPI_IN_PLACE, pefloor, 1, MPI_INT64_T, MPI_SUM, MPI_COMM_WORLD);
   MPI_Allreduce(MPI_IN_PLACE, ptfloor, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
   MPI_Allreduce(MPI_IN_PLACE, pvceil,  1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
   MPI_Allreduce(MPI_IN_PLACE, pfail,   1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
   MPI_Allreduce(MPI_IN_PLACE, pmaxit,  1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
-  MPI_Allreduce(MPI_IN_PLACE, pfofc,   1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+  MPI_Allreduce(MPI_IN_PLACE, pfofc,   1, MPI_INT64_T, MPI_SUM, MPI_COMM_WORLD);
 #endif
 
   // check if there is any data to be written
@@ -99,13 +101,13 @@ void EventLogOutput::WriteOutputFile(Mesh *pm, ParameterInput *pin) {
     // write event counters
     if (!(no_output)) {
       std::fprintf(pfile, "%8d", pm->ncycle);
-      std::fprintf(pfile, " %8d", pm->ecounter.neos_dfloor);
-      std::fprintf(pfile, " %8d", pm->ecounter.neos_efloor);
+      std::fprintf(pfile, " %8" PRId64, pm->ecounter.neos_dfloor);
+      std::fprintf(pfile, " %8" PRId64, pm->ecounter.neos_efloor);
       std::fprintf(pfile, " %8d", pm->ecounter.neos_tfloor);
       std::fprintf(pfile, " %8d", pm->ecounter.neos_vceil);
       std::fprintf(pfile, " %8d", pm->ecounter.neos_fail);
       std::fprintf(pfile, " %6d", pm->ecounter.maxit_c2p);
-      std::fprintf(pfile, " %8d", pm->ecounter.nfofc);
+      std::fprintf(pfile, " %8" PRId64, pm->ecounter.nfofc);
       std::fprintf(pfile,"\n"); // terminate line
     }
     std::fclose(pfile);

@@ -69,7 +69,11 @@ struct LogicalLocation {
 //! \brief stores various counters used as diagnostics throughout the code
 
 struct EventCounters {
-  int nfofc, neos_dfloor, neos_efloor, neos_tfloor, neos_vceil, neos_fail, maxit_c2p;
+  // 64-bit: accumulate over cells x C2P calls x cycles between event-log writes and
+  // over MPI ranks, which can exceed INT_MAX (e.g. floors holding a large background
+  // region every step)
+  std::int64_t nfofc, neos_dfloor, neos_efloor;
+  int neos_tfloor, neos_vceil, neos_fail, maxit_c2p;
   EventCounters() : nfofc(0), neos_dfloor(0), neos_efloor(0), neos_tfloor(0),
                     neos_vceil(0), neos_fail(0), maxit_c2p(0) {}
 };
