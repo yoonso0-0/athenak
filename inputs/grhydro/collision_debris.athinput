@@ -82,8 +82,9 @@ M_total       = 1.0               # debris mass parameter [M_sun]; the profile h
 density_scale = 1.0e-6           # physical density of code rho = 1 [g/cm^3]
 mu            = 0.6               # mean molecular weight (default 0.6); p = rho k_B T / (mu m_u)
 
-# Spherical flux diagnostics -> <basename>.user.flux<n>.hst
-user_hist   = true          # enroll mdot/edot/ldot through flux_radii
+# Flux and volume diagnostics -> <basename>.user.flux<n>.hst, .user.volume.hst
+user_hist   = true          # enroll mdot/edot/ldot through flux_radii, and
+                            # mass/energy/eint volume integrals
 flux_radii  = 12, 24        # extra comma-separated KS radii [r_g] (default: 12, 24);
                             # the outer horizon 1+sqrt(1-a^2) is always added as flux0
 flux_nlev   = 5             # angular resolution: 10*nlev^2+2 points

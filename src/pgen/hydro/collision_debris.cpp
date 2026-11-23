@@ -27,9 +27,15 @@
 //!   - flux_ninterp: interpolation points per axis (default -1 = 2*nghost)
 //!   - each header records radius, nangles, and flux_ninterp
 //!
+//! Volume diagnostics (<problem>/user_hist = true):
+//!   - one history file <basename>.user.volume.hst with mass, energy, and eint
+//!     summed over the cells outside the outer horizon (see VolumeIntegrals)
+//!   - the header records r_min, the outer horizon radius
+//!
 //! Equatorial symmetry: with a reflecting boundary at z = 0 the mesh may cover
 //! only the upper or the lower half. The flux surfaces then still integrate
-//! the full sphere, and the headers record symmetry_factor=2.
+//! the full sphere, the volume integrals are doubled to the full domain, and
+//! the headers record symmetry_factor=2.
 
 #include <algorithm>
 #include <cmath>
@@ -57,10 +63,13 @@
 
 namespace {
 void NoInflowBoundary(Mesh *pm);
+void UserHistory(HistoryData *pdata, Mesh *pm);
 void AccretionFluxes(HistoryData *pdata, Mesh *pm);
+void VolumeIntegrals(HistoryData *pdata, Mesh *pm);
 
 // Equatorial fold of the flux surfaces: +1 (-1) maps every point onto the
 // upper (lower) half-domain by reflection through z = 0; 0 means no fold.
+// A nonzero fold also doubles the volume integrals to the full domain.
 // The equatorial plane is the only reflection symmetry of a spinning Kerr
 // metric.
 int equatorial_fold = 0;
@@ -261,7 +270,7 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
 
   // Callbacks and flux surfaces are set up on restarts too.
   user_bcs_func = NoInflowBoundary;
-  user_hist_func = AccretionFluxes;
+  user_hist_func = UserHistory;
   if (user_hist) {
     if (!pmy_mesh_->three_d) {
       Fatal("<problem>/user_hist requires a 3D mesh for spherical flux "
@@ -307,6 +316,8 @@ void ProblemGenerator::UserProblem(ParameterInput *pin, const bool restart) {
       }
       user_hist_tags.push_back("flux" + std::to_string(n));
     }
+    // Volume integrals come after the flux files (see UserHistory).
+    user_hist_tags.push_back("volume");
   }
   if (restart)
     return;
@@ -627,6 +638,19 @@ void NoInflowBoundary(Mesh *pm) {
 }
 
 //----------------------------------------------------------------------------------------
+//! \brief Route each user history file: flux<n> for the spherical grids, then
+//! the volume integrals.
+
+void UserHistory(HistoryData *pdata, Mesh *pm) {
+  if (pdata->user_index <
+      static_cast<int>(pm->pgen->spherical_grids.size())) {
+    AccretionFluxes(pdata, pm);
+  } else {
+    VolumeIntegrals(pdata, pm);
+  }
+}
+
+//----------------------------------------------------------------------------------------
 //! \brief Integrate hydro fluxes through a constant-r Kerr-Schild surface,
 //! with dA = sqrt(-g) dtheta dphi = (r^2 + a^2 cos^2 theta) dOmega.
 //! Signs match gr_torus:
@@ -703,6 +727,95 @@ void AccretionFluxes(HistoryData *pdata, Mesh *pm) {
     pdata->hdata[1] -= enthalpy * ur * ucov[0] * area;
     pdata->hdata[2] += enthalpy * ur * u_phi * area;
   }
+}
+
+//----------------------------------------------------------------------------------------
+//! \brief Volume integrals written to <basename>.user.volume.hst.
+//!
+//! Region: every active cell whose center lies outside the outer horizon,
+//!   r_KS > r_min = 1 + sqrt(1 - a^2)   (also applied with minkowski = true),
+//! i.e. the region bounded by flux0. With the horizon resolved, mass changes
+//! only through -mdot(flux0), the outer boundary, and floors. If the horizon
+//! fits inside the central cells (dx >~ r_min), no cell is cut and accreted
+//! gas stays in the sum.
+//!
+//! Columns (d^3x = dx dy dz, sqrt(-g) = 1 in Cartesian Kerr-Schild):
+//!
+//!   column   | quantity                   | integral           | per cell (x vol)
+//!   ---------+----------------------------+--------------------+--------------------
+//!   mass     | rest mass                  | int rho u^t d^3x   | u0(IDN)
+//!   energy   | total energy, incl. rest   | -int T^t_t d^3x    | u0(IDN) - u0(IEN)
+//!            | mass (same sign as edot)   |                    |
+//!   eint     | internal energy e=p/(g-1), | int e u^t d^3x     | u0(IDN) e / rho
+//!            | measured in fluid frame    | = int (e/rho) dM   |
+//!
+//!   rho = w0(IDN), e = w0(IEN). The conserved variables are u0(IDN) = rho u^t and
+//!   u0(IEN) = T^t_t + rho u^t, so energy = -int T^t_t d^3x.
+//!
+//! Equatorial symmetry: on a half-domain mesh every column is doubled to the
+//! full domain and the header records symmetry_factor=2.
+
+void VolumeIntegrals(HistoryData *pdata, Mesh *pm) {
+  auto *pmbp = pm->pmb_pack;
+  auto *phydro = pmbp->phydro;
+  const Real spin = pmbp->pcoord->coord_data.bh_spin;
+  const Real r_min = 1.0 + std::sqrt(1.0 - SQR(spin));
+  constexpr int nvol = 3;
+  static_assert(nvol <= NHISTORY_VARIABLES, "Too many volume integral columns");
+  pdata->nhist = nvol;
+  pdata->label[0] = "mass";
+  pdata->label[1] = "energy";
+  pdata->label[2] = "eint";
+  pdata->symmetry_factor = (equatorial_fold == 0) ? 1 : 2;
+  pdata->header_params = {{"r_min", r_min}};
+
+  auto &u0 = phydro->u0;
+  auto &w0 = phydro->w0;
+  auto &size = pmbp->pmb->mb_size;
+  auto &indcs = pm->mb_indcs;
+  const int is = indcs.is, nx1 = indcs.nx1;
+  const int js = indcs.js, nx2 = indcs.nx2;
+  const int ks = indcs.ks, nx3 = indcs.nx3;
+  const int nkji = nx3 * nx2 * nx1;
+  const int nji = nx2 * nx1;
+  const int nmkji = pmbp->nmb_thispack * nkji;
+
+  array_sum::GlobalSum sum;
+  Kokkos::parallel_reduce(
+      "DebrisVolumeSums", Kokkos::RangePolicy<>(DevExeSpace(), 0, nmkji),
+      KOKKOS_LAMBDA(const int idx, array_sum::GlobalSum &mb_sum) {
+        // m, k, j, i, with k, j, i relative to the first active cell
+        const int m = idx / nkji;
+        const int k = (idx - m * nkji) / nji;
+        const int j = (idx - m * nkji - k * nji) / nx1;
+        const int i = idx - m * nkji - k * nji - j * nx1;
+        array_sum::GlobalSum cell; // zero-initialized
+
+        const auto &mb = size.d_view(m);
+        const Real x = CellCenterX(i, nx1, mb.x1min, mb.x1max);
+        const Real y = CellCenterX(j, nx2, mb.x2min, mb.x2max);
+        const Real z = CellCenterX(k, nx3, mb.x3min, mb.x3max);
+        // Kerr-Schild r at the cell center
+        const Real r2 = SQR(x) + SQR(y) + SQR(z) - SQR(spin);
+        const Real r_ks =
+            sqrt(0.5 * (r2 + sqrt(SQR(r2) + 4.0 * SQR(spin * z))));
+        if (r_ks > r_min) {
+          const int kk = k + ks, jj = j + js, ii = i + is;
+          const Real vol = mb.dx1 * mb.dx2 * mb.dx3;
+          const Real dmass = vol * u0(m, IDN, kk, jj, ii);
+          cell.the_array[0] = dmass;
+          cell.the_array[1] = dmass - vol * u0(m, IEN, kk, jj, ii);
+          cell.the_array[2] =
+              dmass * w0(m, IEN, kk, jj, ii) / w0(m, IDN, kk, jj, ii);
+        }
+        mb_sum += cell;
+      },
+      Kokkos::Sum<array_sum::GlobalSum>(sum));
+
+  // A half-domain mesh holds half of each integral.
+  const Real factor = static_cast<Real>(pdata->symmetry_factor);
+  for (int n = 0; n < nvol; ++n)
+    pdata->hdata[n] = factor * sum.the_array[n];
 }
 
 } // namespace
