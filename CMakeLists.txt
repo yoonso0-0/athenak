@@ -261,5 +261,16 @@ target_include_directories(athena PUBLIC
 
 configure_file(config.hpp.in config.hpp)
 
+# standalone metric dump tool for cross-checks (not built by default): make metric_dump
+add_executable(metric_dump EXCLUDE_FROM_ALL src/utils/metric_dump.cpp)
+target_include_directories(metric_dump PRIVATE
+  ${CMAKE_SOURCE_DIR}/src
+  ${CMAKE_CURRENT_BINARY_DIR}
+)
+target_link_libraries(metric_dump PRIVATE Kokkos::kokkos)
+if (ENABLE_MPI)
+  target_link_libraries(metric_dump PRIVATE MPI::MPI_CXX)
+endif()
+
 install( TARGETS athena DESTINATION bin )
 
