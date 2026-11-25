@@ -254,7 +254,7 @@ void SingleStateLLF_GRHyd(const HydPrim1D wl, const HydPrim1D wr,
   du.mx = qa * ulr[ivx] - qb * ull[ivx];
   du.my = qa * ulr[ivy] - qb * ull[ivy];
   du.mz = qa * ulr[ivz] - qb * ull[ivz];
-  du.e  = qa * ulr[0] - qb * ull[0] + wr_ipr - wl_ipr;
+  du.e  = (qa * ulr[0] + wr_ipr) - (qb * ull[0] + wl_ipr);  // exactly odd under L<->R
 
   // Calculate fluxes in L region (rho u^i and T^i_\mu, where i = ivx)
   HydCons1D fl;
