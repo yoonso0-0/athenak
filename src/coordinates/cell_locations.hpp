@@ -18,24 +18,27 @@
 //! \fn void LeftEdgeX()
 // returns x-posn of left edge of i^th cell where index range [0,N] maps to [xmin,xmax]
 // returns ghost cell posn if i outside range [0,N] (e.g. i=-1 is x-posn of first ghost
-// cell). Averages linear interpolation from each side to symmetrize r.o. error
+// cell). Measured from the midpoint of [xmin,xmax] so that, for bounds mirrored about
+// zero, edge ith and edge (n-ith) are exact negatives of each other (also under FMA).
 
 KOKKOS_INLINE_FUNCTION
 static Real LeftEdgeX(int ith, int n, Real xmin, Real xmax) {
-  Real x = (static_cast<Real>(ith)) / (static_cast<Real>(n));
-  return (x*xmax - x*xmin) - (0.5*xmax - 0.5*xmin) + (0.5*xmin + 0.5*xmax);
+  Real dx = (xmax - xmin)/(static_cast<Real>(n));
+  return 0.5*(xmin + xmax) + (static_cast<Real>(ith) - 0.5*static_cast<Real>(n))*dx;
 }
 
 //----------------------------------------------------------------------------------------
 //! \fn void CellCenterX()
 // returns cell-center posn of i^th cell where index range [0,N] maps to [xmin,xmax]
 // returns ghost cell posn if i outside range [0,N] (e.g. i=-1 is cc-posn of first ghost
-// cell). Averages linear interpolation from each side to symmetrize r.o. error
+// cell). Measured from the midpoint of [xmin,xmax] so that mirror-image cells of
+// mirror-image MeshBlocks get exactly negated positions (also under FMA).
 
 KOKKOS_INLINE_FUNCTION
 static Real CellCenterX(int ith, int n, Real xmin, Real xmax) {
-  Real x = (static_cast<Real>(ith) + 0.5) / (static_cast<Real>(n));
-  return (x*xmax - x*xmin) - (0.5*xmax - 0.5*xmin) + (0.5*xmin + 0.5*xmax);
+  Real dx = (xmax - xmin)/(static_cast<Real>(n));
+  Real xi = (static_cast<Real>(ith) + 0.5) - 0.5*static_cast<Real>(n);
+  return 0.5*(xmin + xmax) + xi*dx;
 }
 
 //----------------------------------------------------------------------------------------
