@@ -1256,8 +1256,9 @@ void MeshRefinement::RestrictCC(DvceArray5D<Real> &u, DvceArray5D<Real> &cu,
     KOKKOS_LAMBDA(const int m, const int n, const int j, const int i) {
       int finei = 2*i - cis;  // correct when cis=is
       int finej = 2*j - cjs;  // correct when cjs=js
-      cu(m,n,cks,j,i) = 0.25*(u(m,n,cks,finej  ,finei) + u(m,n,cks,finej  ,finei+1)
-                            + u(m,n,cks,finej+1,finei) + u(m,n,cks,finej+1,finei+1));
+      // diagonal pairs first: bitwise invariant under axis reflections (cf. 3D below)
+      cu(m,n,cks,j,i) = 0.25*((u(m,n,cks,finej  ,finei) + u(m,n,cks,finej+1,finei+1))
+                            + (u(m,n,cks,finej+1,finei) + u(m,n,cks,finej  ,finei+1)));
     });
 
   // restrict in 3D
@@ -1268,11 +1269,13 @@ void MeshRefinement::RestrictCC(DvceArray5D<Real> &u, DvceArray5D<Real> &cu,
       int finej = 2*j - cjs;  // correct when cjs=js
       int finek = 2*k - cks;  // correct when cks=ks
       if (!is_z4c) {
+        // Sum antipodal fine-cell pairs first.  Any axis reflection maps this sum tree
+        // onto itself up to commutation, so mirror-image coarse cells are bitwise equal.
         cu(m,n,k,j,i) =
-            0.125*(u(m,n,finek  ,finej  ,finei) + u(m,n,finek  ,finej  ,finei+1)
-                + u(m,n,finek  ,finej+1,finei) + u(m,n,finek  ,finej+1,finei+1)
-                + u(m,n,finek+1,finej,  finei) + u(m,n,finek+1,finej,  finei+1)
-                + u(m,n,finek+1,finej+1,finei) + u(m,n,finek+1,finej+1,finei+1));
+            0.125*(((u(m,n,finek  ,finej  ,finei  ) + u(m,n,finek+1,finej+1,finei+1))
+                  + (u(m,n,finek  ,finej+1,finei+1) + u(m,n,finek+1,finej  ,finei  )))
+                 + ((u(m,n,finek  ,finej+1,finei  ) + u(m,n,finek+1,finej  ,finei+1))
+                  + (u(m,n,finek  ,finej  ,finei+1) + u(m,n,finek+1,finej+1,finei  ))));
       } else {
         switch (indcs.ng) {
           case 2: cu(m,n,k,j,i) = RestrictInterpolation<2>(m,n,finek,finej,finei,

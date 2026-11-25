@@ -89,8 +89,9 @@ TaskStatus MeshBoundaryValuesCC::PackAndSendFluxCC(DvceFaceFld5D<Real> &flx) {
           } else if (two_d) {
             rflx = 0.5*(flx.x1f(m,v,0,fj,fi) + flx.x1f(m,v,0,fj+1,fi));
           } else {
-            rflx = 0.25*(flx.x1f(m,v,fk  ,fj,fi) + flx.x1f(m,v,fk  ,fj+1,fi) +
-                         flx.x1f(m,v,fk+1,fj,fi) + flx.x1f(m,v,fk+1,fj+1,fi));
+            // diagonal pairs first: bitwise invariant under in-plane reflections
+            rflx = 0.25*((flx.x1f(m,v,fk  ,fj,fi) + flx.x1f(m,v,fk+1,fj+1,fi)) +
+                         (flx.x1f(m,v,fk+1,fj,fi) + flx.x1f(m,v,fk  ,fj+1,fi)));
           }
           // copy directly into recv buffer if MeshBlocks on same rank
           if (nghbr.d_view(m,n).rank == my_rank) {
@@ -115,8 +116,8 @@ TaskStatus MeshBoundaryValuesCC::PackAndSendFluxCC(DvceFaceFld5D<Real> &flx) {
           if (two_d) {
             rflx = 0.5*(flx.x2f(m,v,0,fj,fi) + flx.x2f(m,v,0,fj,fi+1));
           } else {
-            rflx = 0.25*(flx.x2f(m,v,fk  ,fj,fi) + flx.x2f(m,v,fk  ,fj,fi+1) +
-                         flx.x2f(m,v,fk+1,fj,fi) + flx.x2f(m,v,fk+1,fj,fi+1));
+            rflx = 0.25*((flx.x2f(m,v,fk  ,fj,fi) + flx.x2f(m,v,fk+1,fj,fi+1)) +
+                         (flx.x2f(m,v,fk+1,fj,fi) + flx.x2f(m,v,fk  ,fj,fi+1)));
           }
           // copy directly into recv buffer if MeshBlocks on same rank
           if (nghbr.d_view(m,n).rank == my_rank) {
@@ -137,8 +138,8 @@ TaskStatus MeshBoundaryValuesCC::PackAndSendFluxCC(DvceFaceFld5D<Real> &flx) {
           j += jl;
           int fi = 2*i - cis;
           int fj = 2*j - cjs;
-          Real rflx = 0.25*(flx.x3f(m,v,fk,fj  ,fi) + flx.x3f(m,v,fk,fj  ,fi+1) +
-                            flx.x3f(m,v,fk,fj+1,fi) + flx.x3f(m,v,fk,fj+1,fi+1));
+          Real rflx = 0.25*((flx.x3f(m,v,fk,fj  ,fi) + flx.x3f(m,v,fk,fj+1,fi+1)) +
+                            (flx.x3f(m,v,fk,fj+1,fi) + flx.x3f(m,v,fk,fj  ,fi+1)));
           // copy directly into recv buffer if MeshBlocks on same rank
           if (nghbr.d_view(m,n).rank == my_rank) {
             rbuf[dn].flux(dm, (i-il + ni*(j-jl + nj*v)) ) = rflx;

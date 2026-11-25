@@ -434,16 +434,18 @@ void MeshBoundaryValuesCC::FillCoarseInBndryCC(DvceArray5D<Real> &a,
 
           // restrict in 2D
           if (!(three_d)) {
-            ca(m,v,kl,j,i) = 0.25*(a(m,v,kl,finej  ,finei) + a(m,v,kl,finej  ,finei+1)
-                                 + a(m,v,kl,finej+1,finei) + a(m,v,kl,finej+1,finei+1));
+            // diagonal pairing; see MeshRefinement::RestrictCC()
+            ca(m,v,kl,j,i) = 0.25*((a(m,v,kl,finej  ,finei) + a(m,v,kl,finej+1,finei+1))
+                                 + (a(m,v,kl,finej+1,finei) + a(m,v,kl,finej  ,finei+1)));
           // restrict in 3D
           } else {
             if (!is_z4c) {
+              // antipodal pairing; see MeshRefinement::RestrictCC()
               ca(m,v,k,j,i) = 0.125*(
-                  a(m,v,finek  ,finej  ,finei) + a(m,v,finek  ,finej  ,finei+1)
-                + a(m,v,finek  ,finej+1,finei) + a(m,v,finek  ,finej+1,finei+1)
-                + a(m,v,finek+1,finej,  finei) + a(m,v,finek+1,finej,  finei+1)
-                + a(m,v,finek+1,finej+1,finei) + a(m,v,finek+1,finej+1,finei+1));
+                  ((a(m,v,finek  ,finej  ,finei  ) + a(m,v,finek+1,finej+1,finei+1))
+                 + (a(m,v,finek  ,finej+1,finei+1) + a(m,v,finek+1,finej  ,finei  )))
+                + ((a(m,v,finek  ,finej+1,finei  ) + a(m,v,finek+1,finej  ,finei+1))
+                 + (a(m,v,finek  ,finej  ,finei+1) + a(m,v,finek+1,finej+1,finei  ))));
             } else {
                 switch (indcs.ng) {
                   case 2: ca(m,v,k,j,i) = RestrictInterpolation<2>(m,v,finek,finej,finei,
